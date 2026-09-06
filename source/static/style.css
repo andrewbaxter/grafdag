@@ -33,9 +33,8 @@
     --gd-layer-6: #65a30d;
     --gd-layer-7: #b45309;
 
-    /* Fading */
-    --gd-fade: 0.6;
-    --gd-fade-secondary: 0.3;
+    /* Fading (node/edge fade levels are set by the widget as inline opacity,
+     * see the panel sliders) */
     --gd-disabled-opacity: 0.35;
     --gd-ghost-opacity: 0.75;
 
@@ -229,16 +228,7 @@ html, body {
     border: var(--gd-node-border-width) solid transparent;
     border-radius: calc(var(--gd-node-radius) + var(--gd-sel-pad) + var(--gd-node-border-width));
     margin: calc(-1 * (var(--gd-sel-pad) + var(--gd-node-border-width)));
-    opacity: var(--gd-fade);
     cursor: pointer;
-}
-
-.gd_node_wrap.gd_secondary {
-    opacity: var(--gd-fade-secondary);
-}
-
-.gd_node_wrap.gd_active {
-    opacity: 1;
 }
 
 .gd_node_wrap.gd_node_start {
@@ -290,15 +280,6 @@ html, body {
     stroke: var(--gd-edge);
     stroke-width: var(--gd-edge-width);
     marker-end: url(#gd_arrow);
-    opacity: var(--gd-fade);
-}
-
-.gd_edge.gd_secondary {
-    opacity: var(--gd-fade-secondary);
-}
-
-.gd_edge.gd_active {
-    opacity: 1;
 }
 
 .gd_edge_reversed {
@@ -329,15 +310,6 @@ html, body {
     border-radius: var(--gd-label-radius);
     white-space: nowrap;
     pointer-events: none;
-    opacity: var(--gd-fade);
-}
-
-.gd_edge_label.gd_secondary {
-    opacity: var(--gd-fade-secondary);
-}
-
-.gd_edge_label.gd_active {
-    opacity: 1;
 }
 
 /* Layer colors (outline of nodes, stroke of links) */

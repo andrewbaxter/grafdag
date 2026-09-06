@@ -20,6 +20,8 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 rooting = "0.2"
 lunk = "0.3"
+ezing = "0.2"
+gloo-render = "0.2"
 gloo-events = "0.1"
 gloo-timers = { version = "0.3", features = ["futures"] }
 gloo-utils = "0.1"
@@ -53,6 +55,7 @@ web-sys = { version = "0.3", features = [
     "WheelEventInit",
     "EventInit",
     "NodeList",
+    "MediaQueryList",
 ] }
 
 [dev-dependencies]

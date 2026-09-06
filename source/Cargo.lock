@@ -464,6 +464,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ezing"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "566e88319a9d235613fa84128a4b24450923bf0380d472f161b324936b18a7d1"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -581,6 +590,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gloo-render"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56008b6744713a8e8d98ac3dcb7d06543d5662358c9c805b4ce2167ad4649833"
+dependencies = [
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "gloo-timers"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -632,7 +651,9 @@ name = "grafdag_web"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
+ "ezing",
  "gloo-events",
+ "gloo-render",
  "gloo-timers",
  "gloo-utils",
  "grafdag_core",

@@ -3,6 +3,7 @@
 //! Reactivity is via `lunk` (all reactive properties are prims); DOM
 //! ownership is via `rooting`. Styling is entirely in CSS; the widget only
 //! sets classes, attributes and positions/sizes.
+pub mod anim;
 pub mod state;
 pub mod commands;
 pub mod render;
@@ -37,12 +38,6 @@ impl Widget {
             let toolbar = toolbar::build_toolbar(pc, &state);
             let main = el("div").classes(&["gd_main"]).push(canvas).push(panel);
             let root = el("div").classes(&["gd_app"]).push(toolbar).push(main);
-            // Fade levels are CSS variables on the root
-            root.ref_own(|r| lunk::link!((_pc = pc), (fade = state.fade.clone(), fade_secondary = state.fade_secondary.clone()), (), (r = r.weak()) {
-                let r = r.upgrade()?;
-                render::set_style(&r, "--gd-fade", &fade.get().to_string());
-                render::set_style(&r, "--gd-fade-secondary", &fade_secondary.get().to_string());
-            }));
             interact::attach(&root, &state);
             return (root, state);
         }).expect("Widget must be created outside of event processing");

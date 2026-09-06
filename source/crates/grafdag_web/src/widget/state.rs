@@ -14,6 +14,7 @@ use {
         NodeId,
     },
     lunk::{
+        Animator,
         EventGraph,
         HistPrim,
         Prim,
@@ -55,9 +56,8 @@ pub struct Measured {
 
 #[derive(Default)]
 pub struct RenderState {
-    pub node_els: HashMap<grafdag_core::layout::PlacementId, El>,
-    /// Edge elements, their label element, and their source and dest node ids.
-    pub edge_els: Vec<(El, Option<El>, NodeId, NodeId)>,
+    pub nodes: HashMap<grafdag_core::layout::PlacementId, super::render::NodeView>,
+    pub edges: HashMap<super::render::EdgeKey, super::render::EdgeView>,
 }
 
 pub struct State {
@@ -100,6 +100,10 @@ pub struct State {
     pub fade: HistPrim<f64>,
     /// Opacity of unselected things outside the current layer.
     pub fade_secondary: HistPrim<f64>,
+    pub animator: Animator,
+    /// Whether to animate transitions (false when the browser prefers reduced
+    /// motion).
+    pub animate: Cell<bool>,
 }
 
 pub const DEFAULT_FADE: f64 = 0.6;
@@ -113,7 +117,7 @@ impl State {
     pub fn new(pc: &mut ProcessingContext, eg: EventGraph, mut doc: Document, on_change: Box<dyn Fn(&Document)>) -> Rc<State> {
         doc.sanitize();
         return Rc::new(State {
-            eg: eg,
+            eg: eg.clone(),
             doc: RefCell::new(doc),
             history: RefCell::new(History::default()),
             on_change: on_change,
@@ -140,6 +144,8 @@ impl State {
             search_index: HistPrim::new(pc, 0),
             fade: HistPrim::new(pc, DEFAULT_FADE),
             fade_secondary: HistPrim::new(pc, DEFAULT_FADE_SECONDARY),
+            animator: super::anim::new_animator(&eg),
+            animate: Cell::new(!super::anim::prefers_reduced_motion()),
         });
     }
 

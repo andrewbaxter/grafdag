@@ -103,6 +103,8 @@ fn setup(doc: Document) -> Harness {
     let host = el("div").classes(&["gd_test_host"]).push(widget.el().clone());
     document().body().unwrap().append_child(&host.raw()).unwrap();
     set_root_non_dom(host);
+    // Transitions would make assertions time dependent
+    widget.state().animate.set(false);
     widget.refresh();
     return Harness {
         widget: widget,
@@ -212,6 +214,9 @@ fn mouse_selection_and_zoom() {
     assert!(document().query_selector(".gd_edge_between").unwrap().is_some());
     // Selected nodes and their edges are unfaded
     assert!(node_el("a").class_list().contains("gd_active"));
+    let opacity = |id: &str| node_el(id).dyn_into::<HtmlElement>().unwrap().style().get_property_value("opacity").unwrap().parse::<f64>().unwrap();
+    assert_eq!(opacity("a"), 1.);
+    assert_eq!(opacity("c"), 0.6);
     assert!(!node_el("c").class_list().contains("gd_active"));
     assert!(document().query_selector(".gd_edge.gd_active").unwrap().is_some());
     // Hovering another node makes it (and not the selection) the unfaded one
@@ -344,4 +349,24 @@ fn search() {
     input.dispatch_event(&KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &kinit).unwrap()).unwrap();
     assert_eq!(sel(&h), (Some("c".into()), None));
     assert_eq!(h.widget.state().mode.get(), Mode::Layers);
+}
+
+#[wasm_bindgen_test]
+fn node_moving_into_parent_keeps_element() {
+    // Group g is in layer L (hidden), d is inside it. Enabling L moves d into g.
+    let mut doc = sample_doc();
+    doc.layers[0].active = false;
+    doc.nodes.iter_mut().find(|n| n.id.0 == "g").unwrap().layers = vec![LayerId("L".into())];
+    let h = setup(doc);
+    assert!(document().query_selector(".gd_node_wrap[data-node=\"g\"]").unwrap().is_none());
+    let d_before = node_el("d");
+    let checkbox = document().query_selector(".gd_layer_row .gd_checkbox").unwrap().unwrap().dyn_into::<HtmlInputElement>().unwrap();
+    checkbox.click();
+    let layout = h.widget.state().layout.borrow().clone();
+    assert!(layout.primary(&NodeId("d".into())).unwrap().id.container == Some(NodeId("g".into())));
+    // Same element, now above its container
+    assert!(d_before.is_same_node(Some(&node_el("d"))));
+    let z = |id: &str| node_el(id).dyn_into::<HtmlElement>().unwrap().style().get_property_value("z-index").unwrap();
+    assert_eq!(z("g"), "0");
+    assert_eq!(z("d"), "1");
 }
