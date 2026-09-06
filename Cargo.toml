@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/grafdag_core",
+    "crates/grafdag_web",
+    "crates/grafdag",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "ISC"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1

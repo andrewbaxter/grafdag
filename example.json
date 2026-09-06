@@ -1,0 +1,691 @@
+{
+  "layers": [
+    {
+      "id": "flow",
+      "name": "Request flow",
+      "active": true
+    },
+    {
+      "id": "k8s",
+      "name": "Kubernetes resources",
+      "active": true
+    },
+    {
+      "id": "infra",
+      "name": "Cloud infra",
+      "active": true
+    }
+  ],
+  "selected_layer": "flow",
+  "nodes": [
+    {
+      "id": "client",
+      "text": "Clients",
+      "layers": [
+        "flow"
+      ],
+      "parents": []
+    },
+    {
+      "id": "aws",
+      "text": "AWS (us-east-1)",
+      "layers": [
+        "infra"
+      ],
+      "parents": []
+    },
+    {
+      "id": "aws_c1",
+      "text": "EKS cluster: api-prod",
+      "layers": [
+        "infra",
+        "k8s"
+      ],
+      "parents": [
+        "aws"
+      ]
+    },
+    {
+      "id": "aws_c1_n1",
+      "text": "ip-10-0-1-11 (m6i.xlarge)",
+      "layers": [
+        "infra"
+      ],
+      "parents": [
+        "aws_c1"
+      ]
+    },
+    {
+      "id": "aws_c1_n2",
+      "text": "ip-10-0-1-12 (m6i.xlarge)",
+      "layers": [
+        "infra"
+      ],
+      "parents": [
+        "aws_c1"
+      ]
+    },
+    {
+      "id": "aws_c1_n3",
+      "text": "ip-10-0-2-13 (m6i.xlarge)",
+      "layers": [
+        "infra"
+      ],
+      "parents": [
+        "aws_c1"
+      ]
+    },
+    {
+      "id": "aws_c1_ingress",
+      "text": "Ingress: api.example.com",
+      "layers": [
+        "k8s",
+        "flow"
+      ],
+      "parents": [
+        "aws_c1"
+      ]
+    },
+    {
+      "id": "aws_c1_api_svc",
+      "text": "Service: api",
+      "layers": [
+        "k8s",
+        "flow"
+      ],
+      "parents": [
+        "aws_c1"
+      ]
+    },
+    {
+      "id": "aws_c1_api",
+      "text": "Deployment: api (3 replicas)",
+      "layers": [
+        "k8s",
+        "flow"
+      ],
+      "parents": [
+        "aws_c1"
+      ]
+    },
+    {
+      "id": "aws_c1_dispatch",
+      "text": "Deployment: dispatcher",
+      "layers": [
+        "k8s",
+        "flow"
+      ],
+      "parents": [
+        "aws_c1"
+      ]
+    },
+    {
+      "id": "aws_c2",
+      "text": "EKS cluster: api-staging",
+      "layers": [
+        "infra",
+        "k8s"
+      ],
+      "parents": [
+        "aws"
+      ]
+    },
+    {
+      "id": "aws_c2_n1",
+      "text": "ip-10-1-1-21 (m6i.large)",
+      "layers": [
+        "infra"
+      ],
+      "parents": [
+        "aws_c2"
+      ]
+    },
+    {
+      "id": "aws_c2_n2",
+      "text": "ip-10-1-1-22 (m6i.large)",
+      "layers": [
+        "infra"
+      ],
+      "parents": [
+        "aws_c2"
+      ]
+    },
+    {
+      "id": "aws_c2_api",
+      "text": "Deployment: api (1 replica)",
+      "layers": [
+        "k8s"
+      ],
+      "parents": [
+        "aws_c2"
+      ]
+    },
+    {
+      "id": "aws_c2_api_svc",
+      "text": "Service: api",
+      "layers": [
+        "k8s"
+      ],
+      "parents": [
+        "aws_c2"
+      ]
+    },
+    {
+      "id": "aws_rds",
+      "text": "RDS: postgres-main",
+      "layers": [
+        "infra",
+        "flow"
+      ],
+      "parents": [
+        "aws"
+      ]
+    },
+    {
+      "id": "gcp",
+      "text": "GCP (us-central1)",
+      "layers": [
+        "infra"
+      ],
+      "parents": []
+    },
+    {
+      "id": "gcp_c1",
+      "text": "GKE cluster: workers-a",
+      "layers": [
+        "infra",
+        "k8s"
+      ],
+      "parents": [
+        "gcp"
+      ]
+    },
+    {
+      "id": "gcp_c1_n1",
+      "text": "gke-workers-a-pool-1-a1 (n2-standard-8)",
+      "layers": [
+        "infra"
+      ],
+      "parents": [
+        "gcp_c1"
+      ]
+    },
+    {
+      "id": "gcp_c1_n2",
+      "text": "gke-workers-a-pool-1-a2 (n2-standard-8)",
+      "layers": [
+        "infra"
+      ],
+      "parents": [
+        "gcp_c1"
+      ]
+    },
+    {
+      "id": "gcp_c1_n3",
+      "text": "gke-workers-a-pool-1-a3 (n2-standard-8)",
+      "layers": [
+        "infra"
+      ],
+      "parents": [
+        "gcp_c1"
+      ]
+    },
+    {
+      "id": "gcp_c1_worker_svc",
+      "text": "Service: worker-a",
+      "layers": [
+        "k8s",
+        "flow"
+      ],
+      "parents": [
+        "gcp_c1"
+      ]
+    },
+    {
+      "id": "gcp_c1_worker",
+      "text": "Deployment: worker (6 replicas)",
+      "layers": [
+        "k8s",
+        "flow"
+      ],
+      "parents": [
+        "gcp_c1"
+      ]
+    },
+    {
+      "id": "gcp_c2",
+      "text": "GKE cluster: workers-b",
+      "layers": [
+        "infra",
+        "k8s"
+      ],
+      "parents": [
+        "gcp"
+      ]
+    },
+    {
+      "id": "gcp_c2_n1",
+      "text": "gke-workers-b-pool-1-b1 (n2-standard-8)",
+      "layers": [
+        "infra"
+      ],
+      "parents": [
+        "gcp_c2"
+      ]
+    },
+    {
+      "id": "gcp_c2_n2",
+      "text": "gke-workers-b-pool-1-b2 (n2-standard-8)",
+      "layers": [
+        "infra"
+      ],
+      "parents": [
+        "gcp_c2"
+      ]
+    },
+    {
+      "id": "gcp_c2_worker_svc",
+      "text": "Service: worker-b",
+      "layers": [
+        "k8s",
+        "flow"
+      ],
+      "parents": [
+        "gcp_c2"
+      ]
+    },
+    {
+      "id": "gcp_c2_worker",
+      "text": "Deployment: worker (4 replicas)",
+      "layers": [
+        "k8s",
+        "flow"
+      ],
+      "parents": [
+        "gcp_c2"
+      ]
+    },
+    {
+      "id": "gcp_gcs",
+      "text": "GCS bucket: job-results",
+      "layers": [
+        "infra",
+        "flow"
+      ],
+      "parents": [
+        "gcp"
+      ]
+    },
+    {
+      "id": "aws_c1_api_cm",
+      "text": "ConfigMap: api-config",
+      "layers": [
+        "k8s"
+      ],
+      "parents": [
+        "aws_c1"
+      ]
+    },
+    {
+      "id": "aws_c1_db_secret",
+      "text": "Secret: postgres-credentials",
+      "layers": [
+        "k8s"
+      ],
+      "parents": [
+        "aws_c1"
+      ]
+    },
+    {
+      "id": "aws_c1_gcp_secret",
+      "text": "Secret: gcp-service-account",
+      "layers": [
+        "k8s"
+      ],
+      "parents": [
+        "aws_c1"
+      ]
+    },
+    {
+      "id": "aws_c1_tls",
+      "text": "Secret: api-tls",
+      "layers": [
+        "k8s"
+      ],
+      "parents": [
+        "aws_c1"
+      ]
+    },
+    {
+      "id": "aws_c2_ingress",
+      "text": "Ingress: staging.api.example.com",
+      "layers": [
+        "k8s"
+      ],
+      "parents": [
+        "aws_c2"
+      ]
+    },
+    {
+      "id": "aws_c2_api_cm",
+      "text": "ConfigMap: api-config",
+      "layers": [
+        "k8s"
+      ],
+      "parents": [
+        "aws_c2"
+      ]
+    },
+    {
+      "id": "aws_c2_db_secret",
+      "text": "Secret: postgres-credentials",
+      "layers": [
+        "k8s"
+      ],
+      "parents": [
+        "aws_c2"
+      ]
+    },
+    {
+      "id": "gcp_c1_worker_cm",
+      "text": "ConfigMap: worker-config",
+      "layers": [
+        "k8s"
+      ],
+      "parents": [
+        "gcp_c1"
+      ]
+    },
+    {
+      "id": "gcp_c1_gcs_secret",
+      "text": "Secret: gcs-writer-key",
+      "layers": [
+        "k8s"
+      ],
+      "parents": [
+        "gcp_c1"
+      ]
+    },
+    {
+      "id": "gcp_c2_worker_cm",
+      "text": "ConfigMap: worker-config",
+      "layers": [
+        "k8s"
+      ],
+      "parents": [
+        "gcp_c2"
+      ]
+    },
+    {
+      "id": "gcp_c2_gcs_secret",
+      "text": "Secret: gcs-writer-key",
+      "layers": [
+        "k8s"
+      ],
+      "parents": [
+        "gcp_c2"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "f1",
+      "text": "HTTPS",
+      "source": "client",
+      "dest": "aws_c1_ingress",
+      "layer": "flow"
+    },
+    {
+      "id": "f2",
+      "text": "",
+      "source": "aws_c1_ingress",
+      "dest": "aws_c1_api_svc",
+      "layer": "flow"
+    },
+    {
+      "id": "f3",
+      "text": "",
+      "source": "aws_c1_api_svc",
+      "dest": "aws_c1_api",
+      "layer": "flow"
+    },
+    {
+      "id": "f4",
+      "text": "SQL",
+      "source": "aws_c1_api",
+      "dest": "aws_rds",
+      "layer": "flow"
+    },
+    {
+      "id": "f5",
+      "text": "enqueue",
+      "source": "aws_c1_api",
+      "dest": "aws_c1_dispatch",
+      "layer": "flow"
+    },
+    {
+      "id": "f6",
+      "text": "gRPC",
+      "source": "aws_c1_dispatch",
+      "dest": "gcp_c1_worker_svc",
+      "layer": "flow"
+    },
+    {
+      "id": "f7",
+      "text": "gRPC",
+      "source": "aws_c1_dispatch",
+      "dest": "gcp_c2_worker_svc",
+      "layer": "flow"
+    },
+    {
+      "id": "f8",
+      "text": "",
+      "source": "gcp_c1_worker_svc",
+      "dest": "gcp_c1_worker",
+      "layer": "flow"
+    },
+    {
+      "id": "f9",
+      "text": "",
+      "source": "gcp_c2_worker_svc",
+      "dest": "gcp_c2_worker",
+      "layer": "flow"
+    },
+    {
+      "id": "f10",
+      "text": "results",
+      "source": "gcp_c1_worker",
+      "dest": "gcp_gcs",
+      "layer": "flow"
+    },
+    {
+      "id": "f11",
+      "text": "results",
+      "source": "gcp_c2_worker",
+      "dest": "gcp_gcs",
+      "layer": "flow"
+    },
+    {
+      "id": "f12",
+      "text": "poll",
+      "source": "aws_c1_dispatch",
+      "dest": "gcp_gcs",
+      "layer": "flow"
+    },
+    {
+      "id": "k1",
+      "text": "",
+      "source": "aws_c2_api_svc",
+      "dest": "aws_c2_api",
+      "layer": "k8s"
+    },
+    {
+      "id": "k2",
+      "text": "scheduled on",
+      "source": "aws_c1_api",
+      "dest": "aws_c1_n1",
+      "layer": "k8s"
+    },
+    {
+      "id": "k3",
+      "text": "scheduled on",
+      "source": "aws_c1_api",
+      "dest": "aws_c1_n2",
+      "layer": "k8s"
+    },
+    {
+      "id": "k4",
+      "text": "scheduled on",
+      "source": "aws_c1_dispatch",
+      "dest": "aws_c1_n3",
+      "layer": "k8s"
+    },
+    {
+      "id": "k5",
+      "text": "scheduled on",
+      "source": "aws_c2_api",
+      "dest": "aws_c2_n1",
+      "layer": "k8s"
+    },
+    {
+      "id": "k6",
+      "text": "scheduled on",
+      "source": "gcp_c1_worker",
+      "dest": "gcp_c1_n1",
+      "layer": "k8s"
+    },
+    {
+      "id": "k7",
+      "text": "scheduled on",
+      "source": "gcp_c1_worker",
+      "dest": "gcp_c1_n2",
+      "layer": "k8s"
+    },
+    {
+      "id": "k8",
+      "text": "scheduled on",
+      "source": "gcp_c1_worker",
+      "dest": "gcp_c1_n3",
+      "layer": "k8s"
+    },
+    {
+      "id": "k9",
+      "text": "scheduled on",
+      "source": "gcp_c2_worker",
+      "dest": "gcp_c2_n1",
+      "layer": "k8s"
+    },
+    {
+      "id": "k10",
+      "text": "scheduled on",
+      "source": "gcp_c2_worker",
+      "dest": "gcp_c2_n2",
+      "layer": "k8s"
+    },
+    {
+      "id": "i1",
+      "text": "VPC peering",
+      "source": "aws",
+      "dest": "gcp",
+      "layer": "infra"
+    },
+    {
+      "id": "i2",
+      "text": "private subnet",
+      "source": "aws_c1",
+      "dest": "aws_rds",
+      "layer": "infra"
+    },
+    {
+      "id": "i3",
+      "text": "private subnet",
+      "source": "aws_c2",
+      "dest": "aws_rds",
+      "layer": "infra"
+    },
+    {
+      "id": "k11",
+      "text": "tls",
+      "source": "aws_c1_ingress",
+      "dest": "aws_c1_tls",
+      "layer": "k8s"
+    },
+    {
+      "id": "k12",
+      "text": "envFrom",
+      "source": "aws_c1_api",
+      "dest": "aws_c1_api_cm",
+      "layer": "k8s"
+    },
+    {
+      "id": "k13",
+      "text": "env",
+      "source": "aws_c1_api",
+      "dest": "aws_c1_db_secret",
+      "layer": "k8s"
+    },
+    {
+      "id": "k14",
+      "text": "envFrom",
+      "source": "aws_c1_dispatch",
+      "dest": "aws_c1_api_cm",
+      "layer": "k8s"
+    },
+    {
+      "id": "k15",
+      "text": "volume",
+      "source": "aws_c1_dispatch",
+      "dest": "aws_c1_gcp_secret",
+      "layer": "k8s"
+    },
+    {
+      "id": "k16",
+      "text": "",
+      "source": "aws_c2_ingress",
+      "dest": "aws_c2_api_svc",
+      "layer": "k8s"
+    },
+    {
+      "id": "k17",
+      "text": "envFrom",
+      "source": "aws_c2_api",
+      "dest": "aws_c2_api_cm",
+      "layer": "k8s"
+    },
+    {
+      "id": "k18",
+      "text": "env",
+      "source": "aws_c2_api",
+      "dest": "aws_c2_db_secret",
+      "layer": "k8s"
+    },
+    {
+      "id": "k19",
+      "text": "envFrom",
+      "source": "gcp_c1_worker",
+      "dest": "gcp_c1_worker_cm",
+      "layer": "k8s"
+    },
+    {
+      "id": "k20",
+      "text": "volume",
+      "source": "gcp_c1_worker",
+      "dest": "gcp_c1_gcs_secret",
+      "layer": "k8s"
+    },
+    {
+      "id": "k21",
+      "text": "envFrom",
+      "source": "gcp_c2_worker",
+      "dest": "gcp_c2_worker_cm",
+      "layer": "k8s"
+    },
+    {
+      "id": "k22",
+      "text": "volume",
+      "source": "gcp_c2_worker",
+      "dest": "gcp_c2_gcs_secret",
+      "layer": "k8s"
+    }
+  ]
+}
