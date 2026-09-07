@@ -25,7 +25,10 @@ use {
         el,
         El,
     },
-    std::rc::Rc,
+    std::{
+        cell::Cell,
+        rc::Rc,
+    },
     wasm_bindgen::JsCast,
     web_sys::{
         HtmlElement,
@@ -33,6 +36,8 @@ use {
         HtmlSelectElement,
         HtmlTextAreaElement,
         KeyboardEvent,
+        ScrollIntoViewOptions,
+        ScrollLogicalPosition,
     },
 };
 
@@ -66,6 +71,16 @@ fn heading(text: &str) -> El {
     return el("div").classes(&["gd_panel_heading"]).text(text);
 }
 
+/// A pane that replaces the layer list and can be dismissed (returning to the
+/// layer list) with a close button, matching the Escape key. Every such pane
+/// (node editor, link editor, search) is built through here so the heading
+/// and close button are laid out the same way.
+fn closable_pane(state: &Rc<State>, class: &str, title: &str, body: Vec<El>) -> El {
+    let close = icon_button(state, "close", "Close (Escape)", |state, pc| state.mode.set(pc, Mode::Layers));
+    let head = el("div").classes(&["gd_panel_head"]).push(heading(title)).push(close);
+    return el("div").classes(&[class]).push(head).extend(body);
+}
+
 fn text_button(state: &Rc<State>, label: &str, cb: impl Fn(&State, &mut lunk::ProcessingContext) + 'static) -> El {
     let weak = Rc::downgrade(state);
     return el("button").classes(&["gd_text_button"]).attr("type", "button").text(label).on("click", move |_| {
@@ -88,9 +103,13 @@ fn node_label(state: &State, id: &NodeId) -> String {
 
 pub fn build_panel(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
     let content = el("div").classes(&["gd_panel_content"]);
-    content.ref_own(|c| link!((pc = pc), (mode = state.mode.clone()), (), (c = c.weak(), state = Rc::downgrade(state)) {
+    // The search preview (`peek`) is owned by the search panel: it starts
+    // with the current result when the panel is built and ends when the panel
+    // is replaced (the panel's results link takes over in between).
+    content.ref_own(|c| link!((pc = pc), (mode = state.mode.clone()), (peek = state.peek.clone()), (c = c.weak(), state = Rc::downgrade(state)) {
         let c = c.upgrade()?;
         let state = state.upgrade()?;
+        let searching = matches!(mode.get(), Mode::Search(_));
         let body = match mode.get() {
             Mode::Layers => build_layers(pc, &state),
             Mode::EditNode(id) => build_node_editor(pc, &state, &id),
@@ -99,6 +118,13 @@ pub fn build_panel(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
         };
         c.ref_clear();
         c.ref_push(body);
+        // Search fills the panel and scrolls its own results
+        c.ref_modify_classes(&[("gd_panel_content_fill", searching)]);
+        peek.set(pc, if searching {
+            state.search_current()
+        } else {
+            None
+        });
         let f = state.focus_request.borrow_mut().take();
         if let Some(f) = f {
             focus(&f);
@@ -305,7 +331,6 @@ fn build_node_editor(pc: &mut ProcessingContext, state: &Rc<State>, id: &NodeId)
         d.ref_clear();
         d.ref_extend(node_editor_fields(&state, id));
     }));
-    let done = text_button(state, "Done", |state, pc| state.mode.set(pc, Mode::Layers));
     let delete = text_button(state, "Delete node", {
         let id = id.clone();
         move |state, pc| {
@@ -313,11 +338,10 @@ fn build_node_editor(pc: &mut ProcessingContext, state: &Rc<State>, id: &NodeId)
             state.mode.set(pc, Mode::Layers);
         }
     });
-    return el("div").classes(&["gd_editor"]).extend(vec![
-        heading(&format!("Node {}", id.0)),
+    return closable_pane(state, "gd_editor", &format!("Node {}", id.0), vec![
         textarea,
         dynamic,
-        el("div").classes(&["gd_row"]).push(done).push(delete),
+        el("div").classes(&["gd_row"]).push(delete),
     ]);
 }
 
@@ -459,7 +483,6 @@ fn build_edge_editor(pc: &mut ProcessingContext, state: &Rc<State>, id: &EdgeId)
         d.ref_clear();
         d.ref_extend(edge_editor_fields(&state, id));
     }));
-    let done = text_button(state, "Done", |state, pc| state.mode.set(pc, Mode::Layers));
     let reverse = text_button(state, "Reverse", {
         let id = id.clone();
         move |state, pc| {
@@ -478,11 +501,10 @@ fn build_edge_editor(pc: &mut ProcessingContext, state: &Rc<State>, id: &EdgeId)
             state.mode.set(pc, Mode::Layers);
         }
     });
-    return el("div").classes(&["gd_editor"]).extend(vec![
-        heading(&format!("Link {}", id.0)),
+    return closable_pane(state, "gd_editor", &format!("Link {}", id.0), vec![
         input,
         dynamic,
-        el("div").classes(&["gd_row"]).push(done).push(reverse).push(delete),
+        el("div").classes(&["gd_row"]).push(reverse).push(delete),
     ]);
 }
 
@@ -535,6 +557,41 @@ fn edge_editor_fields(state: &Rc<State>, id: &EdgeId) -> Vec<El> {
 
 // Search
 
+/// A result row: click accepts it, hovering previews it.
+fn search_row(state: &Rc<State>, i: usize, id: &NodeId, text: &str) -> El {
+    let label = if text.is_empty() {
+        format!("({})", id.0)
+    } else {
+        text.lines().next().unwrap_or("").to_string()
+    };
+    let row = el("div").classes(&["gd_search_row"]).text(&label);
+    row.ref_on("click", {
+        let weak = Rc::downgrade(state);
+        move |_| {
+            let Some(state) = weak.upgrade() else {
+                return;
+            };
+            state.eg.event(|pc| {
+                state.search_index.set(pc, i);
+                state.cmd_search_accept(pc);
+            });
+        }
+    });
+    for (event, entering) in [("mouseenter", true), ("mouseleave", false)] {
+        row.ref_on(event, {
+            let weak = Rc::downgrade(state);
+            let id = id.clone();
+            move |_| {
+                let Some(state) = weak.upgrade() else {
+                    return;
+                };
+                state.eg.event(|pc| state.cmd_search_hover(pc, &id, entering));
+            }
+        });
+    }
+    return row;
+}
+
 fn build_search(pc: &mut ProcessingContext, state: &Rc<State>, target: SearchTarget) -> El {
     let input = el("input").classes(&["gd_input"]).attr("type", "text").attr("placeholder", "Search nodes");
     input.ref_on("input", {
@@ -544,10 +601,7 @@ fn build_search(pc: &mut ProcessingContext, state: &Rc<State>, target: SearchTar
                 return;
             };
             let value = input_value(ev);
-            state.eg.event(|pc| {
-                state.search_query.set(pc, value);
-                state.search_index.set(pc, 0);
-            });
+            state.eg.event(|pc| state.cmd_search_query(pc, value));
         }
     });
     input.ref_on("keydown", {
@@ -578,38 +632,40 @@ fn build_search(pc: &mut ProcessingContext, state: &Rc<State>, target: SearchTar
     });
     *state.focus_request.borrow_mut() = Some(input.clone());
     let results = el("div").classes(&["gd_search_results"]);
-    results.ref_own(|r| link!((_pc = pc), (query = state.search_query.clone(), index = state.search_index.clone(), version = state.doc_version.clone()), (), (r = r.weak(), state = Rc::downgrade(state)) {
-        let _ = (query, version);
+    // Rows are rebuilt when the results change; moving the current row only
+    // restyles them (so the mouse's row stays hovered). The current row is
+    // previewed; the mouse overrides that while it's over a row.
+    results.ref_own(|r| link!((pc = pc), (query = state.search_query.clone(), index = state.search_index.clone(), version = state.doc_version.clone()), (peek = state.peek.clone()), (r = r.weak(), state = Rc::downgrade(state), built = Cell::new(false)) {
         let r = r.upgrade()?;
         let state = state.upgrade()?;
-        let rows: Vec<El> = state.search_results().iter().enumerate().map(|(i, (id, text))| {
-            let label = if text.is_empty() {
-                format!("({})", id.0)
-            } else {
-                text.lines().next().unwrap_or("").to_string()
+        let results = state.search_results();
+        let rebuild = !built.get() || query.get() != query.get_old() || version.get() != version.get_old();
+        if rebuild {
+            built.set(true);
+            let rows: Vec<El> = results.iter().enumerate().map(|(i, (id, text))| {
+                search_row(&state, i, id, text)
+            }).collect();
+            r.ref_clear();
+            r.ref_extend(rows);
+        }
+        peek.set(pc, results.get(index.get()).map(|(id, _)| id.clone()));
+        let children = r.raw().children();
+        for i in 0 .. children.length() {
+            let Some(row) = children.item(i) else {
+                continue;
             };
-            let row = el("div").classes(&["gd_search_row"]).text(&label);
-            row.ref_modify_classes(&[("gd_search_row_active", i == index.get())]);
-            row.ref_on("click", {
-                let weak = Rc::downgrade(&state);
-                move |_| {
-                    let Some(state) = weak.upgrade() else {
-                        return;
-                    };
-                    state.eg.event(|pc| {
-                        state.search_index.set(pc, i);
-                        state.cmd_search_accept(pc);
-                    });
-                }
-            });
-            row
-        }).collect();
-        r.ref_clear();
-        r.ref_extend(rows);
+            let active = i as usize == index.get();
+            row.class_list().toggle_with_force("gd_search_row_active", active).ok();
+            if active {
+                let opts = ScrollIntoViewOptions::new();
+                opts.set_block(ScrollLogicalPosition::Nearest);
+                row.scroll_into_view_with_scroll_into_view_options(&opts);
+            }
+        }
     }));
     let title = match target {
         SearchTarget::Start => "Search (select start)",
         SearchTarget::End => "Search (select end)",
     };
-    return el("div").classes(&["gd_search"]).extend(vec![heading(title), input, results]);
+    return closable_pane(state, "gd_search", title, vec![input, results]);
 }

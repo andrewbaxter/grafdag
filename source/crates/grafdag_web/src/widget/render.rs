@@ -11,6 +11,7 @@ use {
             Measured,
             Overlay,
             State,
+            Vec2,
         },
     },
     gloo_events::EventListenerOptions,
@@ -60,10 +61,11 @@ use {
     web_sys::HtmlElement,
 };
 
-const SVG_NS: &str = "http://www.w3.org/2000/svg";
-/// Margin around the layout in world coordinates.
-pub const WORLD_MARGIN: f64 = 40.;
+/// Screen-space breathing room (px at zoom 1) kept around the graph when
+/// wrapping ranks to the canvas width.
+pub const VIEW_MARGIN: f64 = 40.;
 
+const SVG_NS: &str = "http://www.w3.org/2000/svg";
 // Animatable values
 
 /// A rectangle as an animatable value.
@@ -214,8 +216,8 @@ fn px(v: f64) -> String {
 }
 
 fn write_rect(e: &El, r: &Rect4) {
-    set_style(e, "left", &px(r.0[0] + WORLD_MARGIN));
-    set_style(e, "top", &px(r.0[1] + WORLD_MARGIN));
+    set_style(e, "left", &px(r.0[0]));
+    set_style(e, "top", &px(r.0[1]));
     set_style(e, "width", &px(r.0[2]));
     set_style(e, "height", &px(r.0[3]));
 }
@@ -228,9 +230,9 @@ fn path_d(points: &[Pt]) -> String {
     let mut out = String::new();
     for (i, p) in points.iter().enumerate() {
         if i == 0 {
-            out.push_str(&format!("M{:.1} {:.1}", p.x + WORLD_MARGIN, p.y + WORLD_MARGIN));
+            out.push_str(&format!("M{:.1} {:.1}", p.x, p.y));
         } else {
-            out.push_str(&format!(" L{:.1} {:.1}", p.x + WORLD_MARGIN, p.y + WORLD_MARGIN));
+            out.push_str(&format!(" L{:.1} {:.1}", p.x, p.y));
         }
     }
     return out;
@@ -241,8 +243,8 @@ fn write_edge_geom(path: &El, hit: &El, label: Option<&El>, g: &EdgeGeom) {
     path.ref_attr("d", &d);
     hit.ref_attr("d", &d);
     if let Some(l) = label {
-        set_style(l, "left", &px(g.label.x + WORLD_MARGIN));
-        set_style(l, "top", &px(g.label.y + WORLD_MARGIN));
+        set_style(l, "left", &px(g.label.x));
+        set_style(l, "top", &px(g.label.y));
     }
 }
 
@@ -604,8 +606,8 @@ fn apply_layout(pc: &mut ProcessingContext, state: &Rc<State>, layout: &Layout, 
     }
 
     // Svg size
-    let w = layout.width + 2. * WORLD_MARGIN;
-    let h = layout.height + 2. * WORLD_MARGIN;
+    let w = layout.width;
+    let h = layout.height;
     svg_el_.ref_attr("width", &format!("{}", w.max(1.)));
     svg_el_.ref_attr("height", &format!("{}", h.max(1.)));
     svg_el_.ref_attr("viewBox", &format!("0 0 {} {}", w.max(1.), h.max(1.)));
@@ -751,9 +753,10 @@ fn apply_layout(pc: &mut ProcessingContext, state: &Rc<State>, layout: &Layout, 
 }
 
 /// Selection borders and fading. Selected nodes and their edges are unfaded;
-/// a hovered node (and its edges) or a hovered link (and its ends) are unfaded
-/// too, in addition to the selection. `animate` eases opacity changes (used
-/// for layer and fade level changes, not for selection or hover).
+/// a hovered node (and its edges), a previewed search result (likewise) or a
+/// hovered link (and its ends) are unfaded too, in addition to the selection.
+/// `animate` eases opacity changes (used for layer and fade level changes, not
+/// for selection or hover).
 fn apply_selection(pc: &mut ProcessingContext, state: &Rc<State>, animate: bool) {
     let mut render = state.render.borrow_mut();
     let start = state.sel_start.get();
@@ -761,10 +764,12 @@ fn apply_selection(pc: &mut ProcessingContext, state: &Rc<State>, animate: bool)
     let sel_edge = state.sel_edge.get();
     let hover = state.hover.get();
     let hover_edge = state.hover_edge.get();
+    let peek = state.peek.get();
     // Nodes whose incident edges are also active: the focused end of the
-    // selection (the end node if there is one, else the start node) and a
-    // hovered node.
-    let spreading: Vec<NodeId> = end.as_ref().or(start.as_ref()).into_iter().chain(hover.iter()).cloned().collect();
+    // selection (the end node if there is one, else the start node), a
+    // hovered node and a previewed search result.
+    let spreading: Vec<NodeId> =
+        end.as_ref().or(start.as_ref()).into_iter().chain(hover.iter()).chain(peek.iter()).cloned().collect();
     // All active nodes: the spreading set plus every selected node and the ends
     // of a hovered edge. Those are unfaded themselves, but their other edges are
     // not (highlighting only ever reaches immediate neighbors).
@@ -891,8 +896,8 @@ fn place_overlay_button(button: &El, r: &Rect4, side: ScreenDir) {
         ScreenDir::Up => ("top", x + w / 2., y),
     };
     button.ref_attr("data-side", name);
-    set_style(button, "left", &px(ax + WORLD_MARGIN));
-    set_style(button, "top", &px(ay + WORLD_MARGIN));
+    set_style(button, "left", &px(ax));
+    set_style(button, "top", &px(ay));
 }
 
 pub fn build_canvas(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
@@ -937,7 +942,7 @@ pub fn build_canvas(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
             } else {
                 width.get()
             };
-            config.max_rank_width = Some((side_extent as f64 - 2. * WORLD_MARGIN).max(200.));
+            config.max_rank_width = Some((side_extent as f64 - 2. * VIEW_MARGIN).max(200.));
             grafdag_core::layout::layout(&doc, &sizes, &config, Some(&previous))
         };
         layout.set(pc, Rc::new(new_layout));
@@ -956,25 +961,47 @@ pub fn build_canvas(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
         state.follow_selection(pc);
     }));
 
-    // Selection and hover: immediate (only layer/fade changes ease)
-    canvas.ref_own(|_| link!((pc = pc), (start = state.sel_start.clone(), end = state.sel_end.clone(), sel_edge = state.sel_edge.clone(), hover = state.hover.clone(), hover_edge = state.hover_edge.clone()), (mode = state.mode.clone()), (state = Rc::downgrade(state)) {
-        let _ = (start, end, sel_edge, hover, hover_edge);
+    // The view eases to center the previewed result, and snaps back when the
+    // preview ends
+    canvas.ref_own(|_| link!((pc = pc), (peek = state.peek.clone(), layout = state.layout.clone()), (offset = state.peek_offset.clone()), (state = Rc::downgrade(state), last = std::cell::Cell::new(None)) {
+        let _ = layout;
+        let state = state.upgrade()?;
+        let target = peek.get().and_then(|id| state.centering_offset(&id));
+        // Links also run when upstream links run without changing anything;
+        // don't restart the easing then
+        if last.get() == Some(target) {
+            return None;
+        }
+        last.set(Some(target));
+        match target {
+            Some(t) => {
+                if state.animate.get() {
+                    offset.set_ease(&state.animator, t, TRANSITION_MS, ease);
+                } else {
+                    offset.set(pc, t);
+                }
+            },
+            None => {
+                state.animator.cancel(offset);
+                offset.set(pc, Vec2::default());
+            },
+        }
+    }));
+
+    // Selection, hover and preview: immediate (only layer/fade changes ease)
+    canvas.ref_own(|_| link!((pc = pc), (start = state.sel_start.clone(), end = state.sel_end.clone(), sel_edge = state.sel_edge.clone(), hover = state.hover.clone(), hover_edge = state.hover_edge.clone(), peek = state.peek.clone()), (), (state = Rc::downgrade(state)) {
+        // Links also run when upstream links run without changing anything;
+        // applying then would cut short in-progress fades. (The initial
+        // application is done by the layout.)
+        let changed =
+            start.get() != start.get_old() || end.get() != end.get_old() || sel_edge.get() != sel_edge.get_old() ||
+                hover.get() != hover.get_old() || hover_edge.get() != hover_edge.get_old() ||
+                peek.get() != peek.get_old();
+        if !changed {
+            return None;
+        }
         let state = state.upgrade()?;
         apply_selection(pc, &state, false);
-        // Editors close when their subject is deselected
-        match mode.get() {
-            super::state::Mode::EditNode(id) => {
-                if state.sel_start.get().as_ref() != Some(&id) && state.sel_end.get().as_ref() != Some(&id) {
-                    mode.set(pc, super::state::Mode::Layers);
-                }
-            },
-            super::state::Mode::EditEdge(id) => {
-                if state.sel_edge.get().as_ref() != Some(&id) {
-                    mode.set(pc, super::state::Mode::Layers);
-                }
-            },
-            _ => { },
-        }
     }));
 
     // Fade level changes ease
@@ -984,10 +1011,11 @@ pub fn build_canvas(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
         apply_selection(pc, &state, true);
     }));
 
-    // View transform
-    canvas.ref_own(|_| link!((_pc = pc), (zoom = state.zoom.clone(), pan = state.pan.clone()), (), (world = world.clone()) {
-        let (px, py) = pan.get();
-        set_style(world, "transform", &format!("translate({}px, {}px) scale({})", px, py, zoom.get()));
+    // View transform: the base pan plus the preview offset
+    canvas.ref_own(|_| link!((_pc = pc), (zoom = state.zoom.clone(), pan = state.pan.clone(), offset = state.peek_offset.clone()), (), (world = world.clone()) {
+        let Vec2(px, py) = pan.get();
+        let off = offset.get();
+        set_style(world, "transform", &format!("translate({}px, {}px) scale({})", px + off.0, py + off.1, zoom.get()));
         set_style(world, "--gd-zoom", &zoom.get().to_string());
     }));
 

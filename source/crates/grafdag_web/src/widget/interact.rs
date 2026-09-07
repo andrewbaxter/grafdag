@@ -4,6 +4,7 @@ use {
         Mode,
         SearchTarget,
         State,
+        Vec2,
     },
     grafdag_core::layout::ScreenDir,
     gloo_events::{
@@ -80,7 +81,8 @@ pub fn handle_key(state: &Rc<State>, ev: &KeyboardEvent) -> bool {
             "s" => state.cmd_new_sibling(pc),
             "N" => state.cmd_new_island(pc),
             "Delete" | "Backspace" => state.cmd_delete(pc),
-            "e" | "Enter" => state.cmd_edit(pc),
+            "Enter" => state.cmd_enter(pc),
+            "e" => state.cmd_edit(pc),
             "E" => state.cmd_edit_start(pc),
             "L" => state.cmd_edit_link(pc),
             "/" => state.cmd_search(pc, SearchTarget::Start),
@@ -145,7 +147,7 @@ pub fn attach_canvas(canvas: &El, state: &Rc<State>) {
             };
             match ev.button() {
                 0 => {
-                    let (px, py) = state.pan.get();
+                    let Vec2(px, py) = state.pan.get();
                     drag.set(Some((ev.client_x() as f64, ev.client_y() as f64, px, py, false)));
                     ev.prevent_default();
                 },
@@ -185,7 +187,7 @@ pub fn attach_canvas(canvas: &El, state: &Rc<State>) {
                 }
                 drag.set(Some((mx, my, px, py, true)));
                 state.eg.event(|pc| {
-                    state.pan.set(pc, (px + dx, py + dy));
+                    state.set_pan(pc, Vec2(px + dx, py + dy));
                 });
             })
         }

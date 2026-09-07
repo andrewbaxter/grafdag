@@ -76,7 +76,6 @@
     --gd-swatch-size: 12px;
     --gd-swatch-radius: 3px;
     --gd-help-key-width: 110px;
-    --gd-results-max-height: 60vh;
     --gd-textarea-min-height: 60px;
     --gd-dot-spacing: 24px;
     --gd-dot-size: 1px;
@@ -453,7 +452,9 @@ html, body {
     width: var(--gd-panel-width);
     border-left: 1px solid var(--gd-border);
     background: var(--gd-panel-bg);
-    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
 .gd_panel_hidden {
@@ -461,10 +462,23 @@ html, body {
 }
 
 .gd_panel_content {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
     padding: var(--gd-panel-pad);
     display: flex;
     flex-direction: column;
     gap: var(--gd-gap-large);
+}
+
+/* The content manages its own scrolling (search results) and fills the panel */
+.gd_panel_content_fill {
+    overflow: hidden;
+}
+
+.gd_panel_content_fill > .gd_search {
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
 .gd_panel_heading {
@@ -474,6 +488,17 @@ html, body {
     letter-spacing: 0.04em;
     color: var(--gd-muted);
     margin: var(--gd-gap-small) 0;
+}
+
+/* Heading row of a closable pane: title on the left, close button on the right */
+.gd_panel_head {
+    display: flex;
+    align-items: center;
+    gap: var(--gd-gap);
+}
+
+.gd_panel_head > .gd_panel_heading {
+    flex: 1 1 auto;
 }
 
 .gd_panel_hint {
@@ -600,11 +625,14 @@ html, body {
 .gd_search_results {
     display: flex;
     flex-direction: column;
-    max-height: var(--gd-results-max-height);
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
 }
 
 .gd_search_row {
+    /* Rows are flex items: don't let them shrink when the list overflows */
+    flex: 0 0 auto;
     padding: var(--gd-control-pad);
     border-radius: var(--gd-row-radius);
     cursor: pointer;

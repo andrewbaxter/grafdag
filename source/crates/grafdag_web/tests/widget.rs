@@ -13,8 +13,10 @@ use {
         NodeId,
     },
     grafdag_web::widget::{
-        render::WORLD_MARGIN,
-        state::Mode,
+        state::{
+            Mode,
+            Vec2,
+        },
         Widget,
     },
     lunk::EventGraph,
@@ -208,7 +210,10 @@ fn keyboard_navigation() {
         key("ArrowUp", false);
         assert_eq!(sel(&h), (s4.clone(), Some("a".into())));
     }
-    // Escape clears end, then start
+    // At the top level, Escape clears end, then start
+    mouse(&node_el("a"), 0);
+    mouse(&node_el("b"), 2);
+    assert_eq!(sel(&h), (Some("a".into()), Some("b".into())));
     key("Escape", false);
     key("Escape", false);
     assert_eq!(sel(&h), (None, None));
@@ -216,6 +221,44 @@ fn keyboard_navigation() {
     assert!(h.widget.state().panel_open.get());
     key("Tab", false);
     assert!(!h.widget.state().panel_open.get());
+}
+
+#[wasm_bindgen_test]
+fn enter_and_exit() {
+    let h = setup(sample_doc());
+    mouse(&node_el("g"), 0);
+    assert_eq!(sel(&h), (Some("g".into()), None));
+    // Enter selects a child of the single node
+    key("Enter", false);
+    assert_eq!(sel(&h), (Some("d".into()), None));
+    // Enter with no children does nothing
+    key("Enter", false);
+    assert_eq!(sel(&h), (Some("d".into()), None));
+    // Escape (exit) selects the parent
+    key("Escape", false);
+    assert_eq!(sel(&h), (Some("g".into()), None));
+    // With an end node, enter/exit move the end node
+    mouse(&node_el("b"), 0);
+    mouse(&node_el("g"), 2);
+    assert_eq!(sel(&h), (Some("b".into()), Some("g".into())));
+    key("Enter", false);
+    assert_eq!(sel(&h), (Some("b".into()), Some("d".into())));
+    key("Escape", false);
+    assert_eq!(sel(&h), (Some("b".into()), Some("g".into())));
+    // At the top level, exit clears the end node, then the start node
+    key("Escape", false);
+    assert_eq!(sel(&h), (Some("b".into()), None));
+    key("Escape", false);
+    assert_eq!(sel(&h), (None, None));
+    // Closing a pane takes priority over exiting
+    mouse(&node_el("d"), 0);
+    key("e", false);
+    assert!(matches!(h.widget.state().mode.get(), Mode::EditNode(_)));
+    key("Escape", false);
+    assert!(matches!(h.widget.state().mode.get(), Mode::Layers));
+    assert_eq!(sel(&h), (Some("d".into()), None));
+    key("Escape", false);
+    assert_eq!(sel(&h), (Some("g".into()), None));
 }
 
 #[wasm_bindgen_test]
@@ -299,18 +342,18 @@ fn left_drag_pans_click_clears() {
     let canvas = document().query_selector(".gd_canvas").unwrap().unwrap();
     let win: web_sys::EventTarget = gloo_utils::window().into();
     // Left drag on empty space pans and keeps the selection
-    let (px, py) = h.widget.state().pan.get();
+    let Vec2(px, py) = h.widget.state().pan.get();
     mouse_at(&canvas, "mousedown", 0, 10., 10.);
     mouse_at(&win, "mousemove", 0, 50., 40.);
     mouse_at(&win, "mouseup", 0, 50., 40.);
-    assert_eq!(h.widget.state().pan.get(), (px + 40., py + 30.));
+    assert_eq!(h.widget.state().pan.get(), Vec2(px + 40., py + 30.));
     assert_eq!(sel(&h), (Some("a".into()), Some("c".into())));
     // Left click without dragging clears the selection
-    let (px, py) = h.widget.state().pan.get();
+    let p = h.widget.state().pan.get();
     mouse_at(&canvas, "mousedown", 0, 10., 10.);
     mouse_at(&win, "mousemove", 0, 11., 11.);
     mouse_at(&win, "mouseup", 0, 11., 11.);
-    assert_eq!(h.widget.state().pan.get(), (px, py));
+    assert_eq!(h.widget.state().pan.get(), p);
     assert_eq!(sel(&h), (None, None));
 }
 
@@ -410,14 +453,14 @@ fn overlay_buttons() {
     let a = h.widget.state().placed(&NodeId("a".into())).unwrap().rect;
     let next_el = next.clone().dyn_into::<HtmlElement>().unwrap();
     let left: f64 = next_el.style().get_property_value("left").unwrap().trim_end_matches("px").parse().unwrap();
-    assert!((left - (a.x + a.w / 2. + WORLD_MARGIN)).abs() < 0.01, "{} vs {:?}", left, a);
+    assert!((left - (a.x + a.w / 2.)).abs() < 0.01, "{} vs {:?}", left, a);
     // With a link selected the sibling button appears to the right of the end
     mouse(&node_el("b"), 2);
     assert!(!sibling.class_list().contains("gd_overlay_hidden"));
     let b = h.widget.state().placed(&NodeId("b".into())).unwrap().rect;
     let sib_el = sibling.clone().dyn_into::<HtmlElement>().unwrap();
     let left: f64 = sib_el.style().get_property_value("left").unwrap().trim_end_matches("px").parse().unwrap();
-    assert!((left - (b.x + b.w + WORLD_MARGIN)).abs() < 0.01);
+    assert!((left - (b.x + b.w)).abs() < 0.01);
     // Clicking the sibling button creates a node linked from the start
     let before = h.widget.state().doc.borrow().nodes.len();
     mouse(&sibling, 0);
@@ -483,6 +526,179 @@ fn search() {
     input.dispatch_event(&KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &kinit).unwrap()).unwrap();
     assert_eq!(sel(&h), (Some("c".into()), None));
     assert_eq!(h.widget.state().mode.get(), Mode::Layers);
+}
+
+fn search_input() -> HtmlInputElement {
+    return document().query_selector(".gd_search .gd_input").unwrap().expect("search input").dyn_into::<HtmlInputElement>().unwrap();
+}
+
+fn search_rows() -> Vec<Element> {
+    let list = document().query_selector_all(".gd_search_row").unwrap();
+    return (0 .. list.length()).map(|i| list.item(i).unwrap().dyn_into::<Element>().unwrap()).collect();
+}
+
+fn input_key(input: &HtmlInputElement, k: &str) {
+    let kinit = KeyboardEventInit::new();
+    kinit.set_key(k);
+    kinit.set_bubbles(true);
+    kinit.set_cancelable(true);
+    input.dispatch_event(&KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &kinit).unwrap()).unwrap();
+}
+
+/// Where a node's center lands on screen, given the current view.
+fn node_screen_center(h: &Harness, id: &str) -> (f64, f64) {
+    let s = h.widget.state();
+    let n = s.placed(&NodeId(id.into())).unwrap();
+    let Vec2(px, py) = s.pan.get();
+    let off = s.peek_offset.get();
+    let z = s.zoom.get();
+    return (px + off.0 + n.rect.cx() * z, py + off.1 + n.rect.cy() * z);
+}
+
+/// Hovering a result (or moving to it with the keyboard) previews it: it's
+/// highlighted like a hovered node and the view centers on it over the base
+/// pan. Leaving snaps the view back; accepting keeps the view where it is.
+#[wasm_bindgen_test]
+fn search_preview() {
+    let h = setup(sample_doc());
+    let s = h.widget.state();
+    let (vw, vh) = s.viewport.get();
+    let base = s.pan.get();
+    key("/", false);
+    let rows = search_rows();
+    assert_eq!(rows.len(), 5);
+    let results = s.search_results();
+    let hover_init = MouseEventInit::new();
+    // Opening search previews the first (current) result
+    let first = results[0].0.clone();
+    assert_eq!(s.peek.get(), Some(first.clone()));
+    assert!(node_el(&first.0).class_list().contains("gd_active"));
+    let (cx, cy) = node_screen_center(&h, &first.0);
+    assert!((cx - vw / 2.).abs() < 0.5 && (cy - vh / 2.).abs() < 0.5, "{} {} vs {} {}", cx, cy, vw, vh);
+    // Hovering a row
+    rows[2].dispatch_event(&MouseEvent::new_with_mouse_event_init_dict("mouseenter", &hover_init).unwrap()).unwrap();
+    let hovered = results[2].0.clone();
+    assert_eq!(s.peek.get(), Some(hovered.clone()));
+    assert!(node_el(&hovered.0).class_list().contains("gd_active"));
+    let (cx, cy) = node_screen_center(&h, &hovered.0);
+    assert!((cx - vw / 2.).abs() < 0.5 && (cy - vh / 2.).abs() < 0.5, "{} {} vs {} {}", cx, cy, vw, vh);
+    assert_eq!(s.pan.get(), base);
+    // Leaving falls back to the current result
+    rows[2].dispatch_event(&MouseEvent::new_with_mouse_event_init_dict("mouseleave", &hover_init).unwrap()).unwrap();
+    assert_eq!(s.peek.get(), Some(first.clone()));
+    assert!(!node_el(&hovered.0).class_list().contains("gd_active"));
+    let (cx, cy) = node_screen_center(&h, &first.0);
+    assert!((cx - vw / 2.).abs() < 0.5 && (cy - vh / 2.).abs() < 0.5);
+    // Keyboard movement previews the current row
+    let input = search_input();
+    input_key(&input, "ArrowDown");
+    assert_eq!(s.search_index.get(), 1);
+    let current = results[1].0.clone();
+    assert_eq!(s.peek.get(), Some(current.clone()));
+    assert!(search_rows()[1].class_list().contains("gd_search_row_active"));
+    let (cx, cy) = node_screen_center(&h, &current.0);
+    assert!((cx - vw / 2.).abs() < 0.5 && (cy - vh / 2.).abs() < 0.5);
+    let offset = s.peek_offset.get();
+    assert_ne!(offset, Vec2::default());
+    // Accepting folds the preview into the base pan: no jump. Closing search
+    // ends the preview (the view stays, so there's nothing to snap back to)
+    input_key(&input, "Enter");
+    assert_eq!(sel(&h), (Some(current.0.clone()), None));
+    assert_eq!(s.mode.get(), Mode::Layers);
+    assert_eq!(s.peek.get(), None);
+    assert!(!node_el(&current.0).class_list().contains("gd_active") || sel(&h).0 == Some(current.0.clone()));
+    assert_eq!(s.peek_offset.get(), Vec2::default());
+    assert_eq!(s.pan.get(), base + offset);
+    let (cx, cy) = node_screen_center(&h, &current.0);
+    assert!((cx - vw / 2.).abs() < 0.5 && (cy - vh / 2.).abs() < 0.5);
+}
+
+/// Search is independent of the selection: selecting, deselecting and
+/// hovering nodes on the canvas leave the search (and its input) alone.
+#[wasm_bindgen_test]
+fn search_survives_selection_changes() {
+    let h = setup(sample_doc());
+    mouse(&node_el("a"), 0);
+    key("?", false);
+    let input = search_input();
+    input.set_value("gam");
+    let init = EventInit::new();
+    init.set_bubbles(true);
+    input.dispatch_event(&Event::new_with_event_init_dict("input", &init).unwrap()).unwrap();
+    assert_eq!(search_rows().len(), 1);
+    // Hover a node, select another, then click empty space
+    let hover_init = MouseEventInit::new();
+    node_el("c").dispatch_event(&MouseEvent::new_with_mouse_event_init_dict("mouseenter", &hover_init).unwrap()).unwrap();
+    mouse(&node_el("b"), 0);
+    let canvas = document().query_selector(".gd_canvas").unwrap().unwrap();
+    let win: web_sys::EventTarget = gloo_utils::window().into();
+    mouse_at(&canvas, "mousedown", 0, 10., 10.);
+    mouse_at(&win, "mouseup", 0, 10., 10.);
+    assert_eq!(sel(&h), (None, None));
+    assert!(matches!(h.widget.state().mode.get(), Mode::Search(_)));
+    // Same input element, same text, same results
+    assert!(search_input().is_same_node(Some(&input)));
+    assert_eq!(search_input().value(), "gam");
+    assert_eq!(search_rows().len(), 1);
+    assert_eq!(h.widget.state().search_query.get(), "gam");
+}
+
+/// With many results the list fills the panel below the search input and
+/// scrolls, and moving with the keyboard keeps the current row in view.
+#[wasm_bindgen_test]
+fn search_results_fill_panel_and_scroll() {
+    let mut doc = sample_doc();
+    for i in 0 .. 80 {
+        doc.nodes.push(node(&format!("n{}", i), &format!("Node {}", i), &[], &[]));
+    }
+    let h = setup(doc);
+    key("/", false);
+    let rows = search_rows();
+    assert_eq!(rows.len(), 85);
+    let panel = document().query_selector(".gd_panel").unwrap().unwrap();
+    let results = document().query_selector(".gd_search_results").unwrap().unwrap();
+    let prect = panel.get_bounding_client_rect();
+    let rrect = results.get_bounding_client_rect();
+    // The list ends at the panel's bottom and scrolls internally
+    assert!((rrect.bottom() - prect.bottom()).abs() < 20., "{} vs {}", rrect.bottom(), prect.bottom());
+    assert!(results.scroll_height() > results.client_height() + 100, "{} vs {}", results.scroll_height(), results.client_height());
+    assert_eq!(results.scroll_top(), 0);
+    assert_eq!(panel.scroll_top(), 0);
+    let input = search_input();
+    for _ in 0 .. 40 {
+        input_key(&input, "ArrowDown");
+    }
+    assert_eq!(h.widget.state().search_index.get(), 40);
+    assert!(results.scroll_top() > 0);
+    let active = search_rows()[40].get_bounding_client_rect();
+    let rrect = results.get_bounding_client_rect();
+    assert!(active.top() >= rrect.top() - 1. && active.bottom() <= rrect.bottom() + 1.);
+}
+
+/// With animation on, the preview eases to center the result and snaps back
+/// on leaving.
+#[wasm_bindgen_test]
+async fn search_preview_eases() {
+    let h = setup(sample_doc());
+    let s = h.widget.state();
+    s.animate.set(true);
+    let (vw, vh) = s.viewport.get();
+    key("/", false);
+    let input = search_input();
+    input_key(&input, "ArrowDown");
+    let current = s.search_results()[1].0.clone();
+    assert_eq!(s.peek.get(), Some(current.clone()));
+    let (cx, cy) = node_screen_center(&h, &current.0);
+    assert!((cx - vw / 2.).abs() > 0.5 || (cy - vh / 2.).abs() > 0.5, "should still be moving");
+    gloo_timers::future::TimeoutFuture::new(600).await;
+    // (The canvas's size arrives asynchronously from a resize observer, so
+    // read it when comparing)
+    let (vw, vh) = s.viewport.get();
+    let (cx, cy) = node_screen_center(&h, &current.0);
+    assert!((cx - vw / 2.).abs() < 0.5 && (cy - vh / 2.).abs() < 0.5, "{} {} vs {} {}", cx, cy, vw, vh);
+    key("Escape", false);
+    assert_eq!(s.mode.get(), Mode::Layers);
+    assert_eq!(s.peek_offset.get(), Vec2::default());
 }
 
 #[wasm_bindgen_test]
@@ -552,10 +768,9 @@ fn parallel_links_and_edge_editor() {
 fn screen_point(h: &Harness, p: grafdag_core::layout::Pt) -> (f64, f64) {
     let canvas = document().query_selector(".gd_canvas").unwrap().unwrap();
     let r = canvas.get_bounding_client_rect();
-    let (px, py) = h.widget.state().pan.get();
+    let Vec2(px, py) = h.widget.state().pan.get();
     let z = h.widget.state().zoom.get();
-    let m = grafdag_web::widget::render::WORLD_MARGIN;
-    return (r.left() + px + (p.x + m) * z, r.top() + py + (p.y + m) * z);
+    return (r.left() + px + p.x * z, r.top() + py + p.y * z);
 }
 
 #[wasm_bindgen_test]
@@ -672,4 +887,132 @@ fn rotated_flow() {
     key("z", false);
     assert_eq!(h.widget.state().doc.borrow().flow, grafdag_core::layout::Flow::Down);
     assert_eq!(h.widget.state().layout.borrow().flow, grafdag_core::layout::Flow::Down);
+}
+
+/// Repeated Up with a backward-pointing selection walks up the graph
+/// (a <- b <- d) instead of flipping the selection each time.
+#[wasm_bindgen_test]
+fn backward_moves_keep_pointing_backward() {
+    let h = setup(sample_doc());
+    mouse(&node_el("d"), 0);
+    mouse(&node_el("b"), 2);
+    assert_eq!(sel(&h), (Some("d".into()), Some("b".into())));
+    key("ArrowUp", false);
+    assert_eq!(sel(&h), (Some("b".into()), Some("a".into())));
+    // Down flips it, since the selection points backward
+    key("ArrowDown", false);
+    assert_eq!(sel(&h), (Some("a".into()), Some("b".into())));
+    // Up flips it back, then another Up keeps walking up (nothing above a)
+    key("ArrowUp", false);
+    assert_eq!(sel(&h), (Some("b".into()), Some("a".into())));
+    key("ArrowUp", false);
+    assert_eq!(sel(&h), (Some("a".into()), None));
+}
+
+/// Every pane that Escape closes has a close button in its heading row that
+/// does the same thing.
+#[wasm_bindgen_test]
+fn panes_have_close_buttons() {
+    let h = setup(sample_doc());
+    let close = || {
+        let b = document().query_selector(".gd_panel_head .gd_button").unwrap().expect("close button");
+        b.dyn_into::<HtmlElement>().unwrap().click();
+    };
+    // Layers has no close button
+    assert!(document().query_selector(".gd_panel_head").unwrap().is_none());
+    key("/", false);
+    assert!(matches!(h.widget.state().mode.get(), Mode::Search(_)));
+    close();
+    assert_eq!(h.widget.state().mode.get(), Mode::Layers);
+    mouse(&node_el("a"), 0);
+    key("e", false);
+    assert!(matches!(h.widget.state().mode.get(), Mode::EditNode(_)));
+    close();
+    assert_eq!(h.widget.state().mode.get(), Mode::Layers);
+    key("ArrowDown", false);
+    key("L", false);
+    assert!(matches!(h.widget.state().mode.get(), Mode::EditEdge(_)));
+    close();
+    assert_eq!(h.widget.state().mode.get(), Mode::Layers);
+}
+
+/// Rendered rectangle (left, top, right, bottom) of an element relative to
+/// the canvas.
+fn screen_rect(e: &Element) -> (f64, f64, f64, f64) {
+    let c = document().query_selector(".gd_canvas").unwrap().unwrap().get_bounding_client_rect();
+    let r = e.get_bounding_client_rect();
+    return (r.left() - c.left(), r.top() - c.top(), r.right() - c.left(), r.bottom() - c.top());
+}
+
+/// Keyboard motions that leave the end node (partly) outside the viewport
+/// center it, whether it was off the far or the near side; ones that don't
+/// leave the view alone.
+#[wasm_bindgen_test]
+fn keyboard_follow_centers_end_node() {
+    let h = setup(sample_doc());
+    let s = h.widget.state();
+    key("PageDown", false);
+    key("ArrowDown", false);
+    let (vw, vh) = s.viewport.get();
+    let end_center = || {
+        let e = sel(&h).1.expect("end node");
+        let (l, t, r, b) = screen_rect(&node_el(&e).query_selector(".gd_node").unwrap().unwrap());
+        ((l + r) / 2., (t + b) / 2.)
+    };
+    let centered = |(x, y): (f64, f64)| (x - vw / 2.).abs() < 1. && (y - vh / 2.).abs() < 1.;
+    // a's other child, which cycling the sibling will select
+    let sibling = || NodeId(if sel(&h).1.as_deref() == Some("b") { "c".into() } else { "b".into() });
+    // Cycling the sibling makes the other child the end. Put that child off
+    // screen beforehand: past the far edge, past the near edge, and then
+    // just poking out of the margin.
+    for case in 0..3 {
+        let other = sibling();
+        let n = s.placed(&other).unwrap();
+        s.eg.event(|pc| {
+            s.pan.set(pc, match case {
+                0 => Vec2(-n.rect.x + vw - 5., -n.rect.y + vh - 5.),
+                1 => Vec2(-n.rect.right() - 500., -n.rect.bottom() - 500.),
+                _ => Vec2(-n.rect.x + 20., vh / 2. - n.rect.cy()),
+            });
+        });
+        key("ArrowRight", false);
+        assert_eq!(sel(&h).1, Some(other.0.clone()));
+        assert!(centered(end_center()), "case {} {:?} in {}x{}", case, end_center(), vw, vh);
+    }
+    // Already in view: cycling doesn't move the view
+    let other = sibling();
+    let n = s.placed(&other).unwrap();
+    s.eg.event(|pc| s.pan.set(pc, Vec2(vw / 2. - n.rect.cx() + 100., vh / 2. - n.rect.cy())));
+    let pan = s.pan.get();
+    key("ArrowRight", false);
+    assert_eq!(sel(&h).1, Some(other.0.clone()));
+    assert_eq!(s.pan.get(), pan);
+}
+
+/// With animation on, a keyboard recenter eases the view rather than jumping.
+#[wasm_bindgen_test]
+async fn keyboard_follow_eases() {
+    let h = setup(sample_doc());
+    let s = h.widget.state();
+    s.animate.set(true);
+    key("PageDown", false);
+    key("ArrowDown", false);
+    let (vw, vh) = s.viewport.get();
+    let other = NodeId(if sel(&h).1.as_deref() == Some("b") { "c".into() } else { "b".into() });
+    let n = s.placed(&other).unwrap();
+    s.eg.event(|pc| s.pan.set(pc, Vec2(-n.rect.right() - 500., -n.rect.bottom() - 500.)));
+    let before = s.pan.get();
+    key("ArrowRight", false);
+    assert_eq!(sel(&h).1, Some(other.0.clone()));
+    let center = || {
+        let (l, t, r, b) = screen_rect(&node_el(&other.0).query_selector(".gd_node").unwrap().unwrap());
+        ((l + r) / 2., (t + b) / 2.)
+    };
+    let (cx, cy) = center();
+    assert!((cx - vw / 2.).abs() > 0.5 || (cy - vh / 2.).abs() > 0.5, "should still be moving");
+    assert_eq!(s.pan.get(), before, "starts from the old position");
+    gloo_timers::future::TimeoutFuture::new(600).await;
+    // (The target was computed from the viewport size known at the key press)
+    let (cx, cy) = center();
+    assert!((cx - vw / 2.).abs() < 1. && (cy - vh / 2.).abs() < 1., "{} {} vs {} {}", cx, cy, vw, vh);
 }

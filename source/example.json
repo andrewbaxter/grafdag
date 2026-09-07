@@ -687,5 +687,6 @@
       "dest": "gcp_c2_gcs_secret",
       "layer": "k8s"
     }
-  ]
+  ],
+  "flow": "Down"
 }

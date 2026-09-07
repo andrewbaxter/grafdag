@@ -56,6 +56,10 @@ web-sys = { version = "0.3", features = [
     "EventInit",
     "NodeList",
     "MediaQueryList",
+    "ScrollIntoViewOptions",
+    "ScrollLogicalPosition",
+    "HtmlCollection",
+    "DomTokenList",
 ] }
 
 [dev-dependencies]

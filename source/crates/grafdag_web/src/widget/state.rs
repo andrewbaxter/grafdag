@@ -27,9 +27,42 @@ use {
             RefCell,
         },
         collections::HashMap,
+        ops::{
+            Add,
+            Mul,
+            Sub,
+        },
         rc::Rc,
     },
 };
+
+/// A screen offset as an animatable value.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Vec2(pub f64, pub f64);
+
+impl Add for Vec2 {
+    type Output = Vec2;
+
+    fn add(self, o: Vec2) -> Vec2 {
+        return Vec2(self.0 + o.0, self.1 + o.1);
+    }
+}
+
+impl Sub for Vec2 {
+    type Output = Vec2;
+
+    fn sub(self, o: Vec2) -> Vec2 {
+        return Vec2(self.0 - o.0, self.1 - o.1);
+    }
+}
+
+impl Mul<f64> for Vec2 {
+    type Output = Vec2;
+
+    fn mul(self, k: f64) -> Vec2 {
+        return Vec2(self.0 * k, self.1 * k);
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SearchTarget {
@@ -86,7 +119,11 @@ pub struct State {
     pub recent: RefCell<Vec<NodeId>>,
     pub mode: HistPrim<Mode>,
     pub zoom: HistPrim<f64>,
-    pub pan: HistPrim<(f64, f64)>,
+    /// The base view position (what panning and following move).
+    pub pan: HistPrim<Vec2>,
+    /// A second view layer on top of `pan`: while a search result is
+    /// previewed the view eases to center it, and snaps back afterwards.
+    pub peek_offset: HistPrim<Vec2>,
     pub layout: Prim<Rc<Layout>>,
     /// Set by keyboard commands: scroll the view to the selection after the
     /// next layout.
@@ -109,6 +146,10 @@ pub struct State {
     /// Search state
     pub search_query: HistPrim<String>,
     pub search_index: HistPrim<usize>,
+    /// The search result being previewed (the row under the mouse, else the
+    /// current row): highlighted like a hovered node, and the view centers on
+    /// it.
+    pub peek: HistPrim<Option<NodeId>>,
     /// Opacity of unselected things.
     pub fade: HistPrim<f64>,
     /// Opacity of unselected things outside the current layer.
@@ -143,7 +184,8 @@ impl State {
             recent: RefCell::new(vec![]),
             mode: HistPrim::new(pc, Mode::Layers),
             zoom: HistPrim::new(pc, 1.),
-            pan: HistPrim::new(pc, (40., 40.)),
+            pan: HistPrim::new(pc, Vec2(40., 40.)),
+            peek_offset: HistPrim::new(pc, Vec2::default()),
             layout: Prim::new(Rc::new(Layout::default())),
             follow: Cell::new(false),
             panel_open: HistPrim::new(pc, true),
@@ -159,6 +201,7 @@ impl State {
             focus_request: RefCell::new(None),
             search_query: HistPrim::new(pc, "".to_string()),
             search_index: HistPrim::new(pc, 0),
+            peek: HistPrim::new(pc, None),
             fade: HistPrim::new(pc, DEFAULT_FADE),
             fade_secondary: HistPrim::new(pc, DEFAULT_FADE_SECONDARY),
             animator: super::anim::new_animator(&eg),
@@ -258,6 +301,25 @@ impl State {
         self.sel_start.set(pc, Some(edge.source));
         self.sel_end.set(pc, Some(edge.dest));
         self.sel_edge.set(pc, Some(id.clone()));
+        self.close_stale_editor(pc);
+    }
+
+    /// Editors close when their subject is deselected. Other modes (search,
+    /// layers) are independent of the selection.
+    fn close_stale_editor(&self, pc: &mut ProcessingContext) {
+        match self.mode.get() {
+            Mode::EditNode(id) => {
+                if self.sel_start.get().as_ref() != Some(&id) && self.sel_end.get().as_ref() != Some(&id) {
+                    self.mode.set(pc, Mode::Layers);
+                }
+            },
+            Mode::EditEdge(id) => {
+                if self.sel_edge.get().as_ref() != Some(&id) {
+                    self.mode.set(pc, Mode::Layers);
+                }
+            },
+            _ => { },
+        }
     }
 
     /// Keep the selected link consistent with the selected nodes: keep it if it
@@ -270,15 +332,17 @@ impl State {
         };
         let Some((s, e)) = pair else {
             self.sel_edge.set(pc, None);
+            drop(doc);
+            self.close_stale_editor(pc);
             return;
         };
-        if let Some(cur) = self.sel_edge.get() {
-            if doc.edges_between(&s, &e).any(|x| x.id == cur) {
-                return;
-            }
+        let keep = self.sel_edge.get().map(|cur| doc.edges_between(&s, &e).any(|x| x.id == cur)).unwrap_or(false);
+        if !keep {
+            let first = doc.edges_between(&s, &e).next().map(|x| x.id.clone());
+            self.sel_edge.set(pc, first);
         }
-        let first = doc.edges_between(&s, &e).next().map(|x| x.id.clone());
-        self.sel_edge.set(pc, first);
+        drop(doc);
+        self.close_stale_editor(pc);
     }
 
     fn touch_recent(&self, id: &NodeId) {

@@ -1,9 +1,16 @@
 //! Editor commands, invoked from the keyboard, mouse and toolbar.
 use {
-    super::state::{
-        Mode,
-        SearchTarget,
-        State,
+    super::{
+        anim::{
+            ease,
+            TRANSITION_MS,
+        },
+        state::{
+            Mode,
+            SearchTarget,
+            State,
+            Vec2,
+        },
     },
     grafdag_core::{
         delete_node_actions,
@@ -18,7 +25,10 @@ use {
         Node,
         NodeId,
     },
-    lunk::ProcessingContext,
+    lunk::{
+        HistPrimEaseExt,
+        ProcessingContext,
+    },
 };
 
 /// Direction along the side axis.
@@ -249,13 +259,13 @@ impl State {
                 let pick = self.pick_recent(&prev);
                 self.set_end(pc, pick);
             },
-            Some(_) => {
-                let prev: Vec<NodeId> = self.prev_nodes(&start).into_iter().filter(|n| n != &start).collect();
-                let Some(pick) = self.pick_recent(&prev) else {
-                    return;
-                };
-                self.set_end(pc, Some(start));
-                self.set_start(pc, Some(pick));
+            Some(end) => {
+                // Mirror cmd_forward: the end leads, the start trails, so the
+                // selection keeps pointing backward.
+                let prev: Vec<NodeId> = self.prev_nodes(&end).into_iter().filter(|n| n != &end).collect();
+                let pick = self.pick_recent(&prev);
+                self.set_start(pc, Some(end));
+                self.set_end(pc, pick);
             },
         }
     }
@@ -314,18 +324,66 @@ impl State {
         self.set_end(pc, None);
     }
 
+    /// Escape: close an open pane (editor/search) if any, else exit.
     pub fn cmd_escape(&self, pc: &mut ProcessingContext) {
         match self.mode.get() {
-            Mode::Layers => {
-                if self.sel_end.get().is_some() {
-                    self.set_end(pc, None);
-                } else {
-                    self.set_start(pc, None);
-                }
-            },
+            Mode::Layers => self.cmd_exit(pc),
             _ => {
                 self.mode.set(pc, Mode::Layers);
             },
+        }
+    }
+
+    /// Visible child nodes (nodes drawn inside) of a node, in layout order.
+    pub fn child_nodes(&self, id: &NodeId) -> Vec<NodeId> {
+        let doc = self.doc.borrow();
+        return self.visible_nodes().into_iter().filter(|c| doc.node(c).map(|n| n.parents.contains(id)).unwrap_or(false)).collect();
+    }
+
+    /// Visible parent nodes (nodes drawn around) of a node.
+    pub fn parent_nodes(&self, id: &NodeId) -> Vec<NodeId> {
+        let doc = self.doc.borrow();
+        let Some(n) = doc.node(id) else {
+            return vec![];
+        };
+        let visible = self.visible_nodes();
+        return n.parents.iter().filter(|p| visible.contains(p)).cloned().collect();
+    }
+
+    /// Replace the focused node (the end node, or the start node if there's
+    /// no end) with `id`.
+    fn set_focus(&self, pc: &mut ProcessingContext, id: NodeId) {
+        if self.sel_end.get().is_some() {
+            self.set_end(pc, Some(id));
+        } else {
+            self.set_start(pc, Some(id));
+        }
+    }
+
+    /// Enter: select a child of the focused node (the most recently selected
+    /// one, else the first).
+    pub fn cmd_enter(&self, pc: &mut ProcessingContext) {
+        self.follow.set(true);
+        let Some(focus) = self.focus_node() else {
+            return;
+        };
+        let children = self.child_nodes(&focus);
+        if let Some(child) = self.pick_recent(&children) {
+            self.set_focus(pc, child);
+        }
+    }
+
+    /// Exit: select the parent of the focused node. At the top level (no
+    /// parent) this clears the end node, then the start node.
+    pub fn cmd_exit(&self, pc: &mut ProcessingContext) {
+        self.follow.set(true);
+        let parent = self.focus_node().and_then(|f| self.pick_recent(&self.parent_nodes(&f)));
+        if let Some(parent) = parent {
+            self.set_focus(pc, parent);
+        } else if self.sel_end.get().is_some() {
+            self.set_end(pc, None);
+        } else {
+            self.set_start(pc, None);
         }
     }
 
@@ -581,6 +639,51 @@ impl State {
         self.mode.set(pc, Mode::Search(target));
     }
 
+    /// The current result (the preview falls back to this when the mouse
+    /// leaves a row).
+    pub fn search_current(&self) -> Option<NodeId> {
+        return self.search_results().get(self.search_index.get()).map(|(id, _)| id.clone());
+    }
+
+    /// The search query changed: results restart from the top.
+    pub fn cmd_search_query(&self, pc: &mut ProcessingContext, query: String) {
+        self.search_query.set(pc, query);
+        self.search_index.set(pc, 0);
+    }
+
+    /// The mouse entered or left a result row.
+    pub fn cmd_search_hover(&self, pc: &mut ProcessingContext, id: &NodeId, entering: bool) {
+        if entering {
+            self.peek.set(pc, Some(id.clone()));
+        } else if self.peek.get().as_ref() == Some(id) {
+            self.peek.set(pc, self.search_current());
+        }
+    }
+
+    /// Screen offset from the base view that centers a node.
+    pub fn centering_offset(&self, id: &NodeId) -> Option<Vec2> {
+        let n = self.placed(id)?;
+        let (vw, vh) = self.viewport.get();
+        let z = self.zoom.get();
+        let Vec2(px, py) = self.pan.get();
+        let cx = n.rect.cx();
+        let cy = n.rect.cy();
+        return Some(Vec2(vw / 2. - (px + cx * z), vh / 2. - (py + cy * z)));
+    }
+
+    /// Make the previewed view position the base view position, so accepting
+    /// a previewed result doesn't move the view.
+    fn fold_peek(&self, pc: &mut ProcessingContext) {
+        let off = self.peek_offset.get();
+        if off == Vec2::default() {
+            return;
+        }
+        self.animator.cancel(&self.peek_offset);
+        let p = self.pan.get();
+        self.set_pan(pc, p + off);
+        self.peek_offset.set(pc, Vec2::default());
+    }
+
     /// Search results for the current query, in layout order.
     pub fn search_results(&self) -> Vec<(NodeId, String)> {
         let query = self.search_query.get().to_lowercase();
@@ -614,6 +717,7 @@ impl State {
         let Some((id, _)) = results.get(self.search_index.get()) else {
             return;
         };
+        self.fold_peek(pc);
         self.follow.set(true);
         match target {
             SearchTarget::Start => {
@@ -638,9 +742,9 @@ impl State {
         let (cx, cy) = center.unwrap_or((vw / 2., vh / 2.));
         let z0 = self.zoom.get();
         let z1 = (z0 * factor).clamp(0.05, 8.);
-        let (px, py) = self.pan.get();
+        let Vec2(px, py) = self.pan.get();
         let k = z1 / z0;
-        self.pan.set(pc, (cx - (cx - px) * k, cy - (cy - py) * k));
+        self.set_pan(pc, Vec2(cx - (cx - px) * k, cy - (cy - py) * k));
         self.zoom.set(pc, z1);
     }
 
@@ -653,11 +757,19 @@ impl State {
         let margin = 40.;
         let z = ((vw - 2. * margin) / layout.width).min((vh - 2. * margin) / layout.height).clamp(0.05, 2.);
         self.zoom.set(pc, z);
-        self.pan.set(pc, ((vw - layout.width * z) / 2., (vh - layout.height * z) / 2.));
+        self.set_pan(pc, Vec2((vw - layout.width * z) / 2., (vh - layout.height * z) / 2.));
+    }
+
+    /// Set the view position directly, stopping any easing in progress.
+    pub fn set_pan(&self, pc: &mut ProcessingContext, v: Vec2) {
+        self.animator.cancel(&self.pan);
+        self.pan.set(pc, v);
     }
 
     /// Pan so the focused node is visible (called after layout when `follow`
-    /// is set).
+    /// is set): if any part of it is outside the viewport (less a margin),
+    /// ease the view to center it. A minimal nudge would leave it hugging the
+    /// edge, with whatever comes next in that direction still hidden.
     pub fn follow_selection(&self, pc: &mut ProcessingContext) {
         if !self.follow.replace(false) {
             return;
@@ -670,34 +782,20 @@ impl State {
         };
         let (vw, vh) = self.viewport.get();
         let z = self.zoom.get();
-        let (px, py) = self.pan.get();
+        let Vec2(px, py) = self.pan.get();
         let margin = 30.;
         let left = px + n.rect.x * z;
         let top = py + n.rect.y * z;
         let right = px + n.rect.right() * z;
         let bottom = py + n.rect.bottom() * z;
-        let mut npx = px;
-        let mut npy = py;
-        if left < margin || right > vw - margin {
-            if n.rect.w * z > vw - 2. * margin {
-                npx = margin - n.rect.x * z;
-            } else if left < margin {
-                npx = px + (margin - left);
-            } else {
-                npx = px - (right - (vw - margin));
-            }
+        if left >= margin && top >= margin && right <= vw - margin && bottom <= vh - margin {
+            return;
         }
-        if top < margin || bottom > vh - margin {
-            if n.rect.h * z > vh - 2. * margin {
-                npy = margin - n.rect.y * z;
-            } else if top < margin {
-                npy = py + (margin - top);
-            } else {
-                npy = py - (bottom - (vh - margin));
-            }
-        }
-        if npx != px || npy != py {
-            self.pan.set(pc, (npx, npy));
+        let target = Vec2(vw / 2. - n.rect.cx() * z, vh / 2. - n.rect.cy() * z);
+        if self.animate.get() {
+            self.pan.set_ease(&self.animator, target, TRANSITION_MS, ease);
+        } else {
+            self.set_pan(pc, target);
         }
     }
 
