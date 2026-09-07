@@ -30,6 +30,10 @@ use {
         LayerId,
         NodeId,
     },
+    serde::{
+        Deserialize,
+        Serialize,
+    },
     std::collections::{
         HashMap,
         HashSet,
@@ -75,10 +79,184 @@ impl Rect {
     }
 }
 
+/// A side of a node along the rank axis: `Before` faces earlier ranks
+/// (predecessors), `After` later ranks (successors). Which screen side that is
+/// depends on the `Flow`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Side {
-    Top,
-    Bottom,
+    Before,
+    After,
+}
+
+/// Where an edge attaches to a node box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Port {
+    pub side: Side,
+    /// Position along the side, in the side axis direction (see `Flow`).
+    pub along: f64,
+}
+
+/// The direction ranks flow on screen. The layout works in a canonical frame
+/// with two perpendicular axes: the rank axis (successive ranks) and the side
+/// axis (nodes within a rank, and islands). `Flow` maps that frame to the
+/// screen: the rank axis points in the flow direction, and the side axis is
+/// the perpendicular screen axis in its natural (rightward/downward) sense.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum Flow {
+    #[default]
+    Down,
+    Up,
+    Right,
+    Left,
+}
+
+/// A direction on screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ScreenDir {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+/// A movement in the canonical frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Motion {
+    /// Along the rank axis to later ranks.
+    Forward,
+    /// Along the rank axis to earlier ranks.
+    Backward,
+    /// Along the side axis in its positive sense.
+    SideNext,
+    SidePrev,
+}
+
+/// Where a container's title strip sits in the canonical frame (it's always
+/// at the top of the box on screen, spanning its width).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TitleAt {
+    /// At the start of the rank axis.
+    RankStart,
+    /// At the end of the rank axis.
+    RankEnd,
+    /// At the start of the side axis.
+    SideStart,
+}
+
+impl Flow {
+    pub const ALL: [Flow; 4] = [Flow::Down, Flow::Right, Flow::Up, Flow::Left];
+
+    /// The next flow when cycling through them.
+    pub fn next(self) -> Flow {
+        let i = Flow::ALL.iter().position(|f| *f == self).unwrap();
+        return Flow::ALL[(i + 1) % Flow::ALL.len()];
+    }
+
+    /// The rank axis is the screen x axis.
+    pub fn horizontal(self) -> bool {
+        return matches!(self, Flow::Right | Flow::Left);
+    }
+
+    /// Convert a size between screen (width, height) and canonical (side
+    /// extent, rank extent). The conversion is its own inverse.
+    pub fn canonical_size(self, s: NodeSize) -> NodeSize {
+        if self.horizontal() {
+            return NodeSize {
+                width: s.height,
+                height: s.width,
+            };
+        }
+        return s;
+    }
+
+    /// Canonical point (side, rank) to screen, given the canonical extents of
+    /// the whole layout.
+    pub fn to_screen(self, extent: NodeSize, p: Pt) -> Pt {
+        return match self {
+            Flow::Down => pt(p.x, p.y),
+            Flow::Up => pt(p.x, extent.height - p.y),
+            Flow::Right => pt(p.y, p.x),
+            Flow::Left => pt(extent.height - p.y, p.x),
+        };
+    }
+
+    /// Screen point to canonical (side, rank), given the canonical extents of
+    /// the whole layout.
+    pub fn to_canonical(self, extent: NodeSize, p: Pt) -> Pt {
+        return match self {
+            Flow::Down => pt(p.x, p.y),
+            Flow::Up => pt(p.x, extent.height - p.y),
+            Flow::Right => pt(p.y, p.x),
+            Flow::Left => pt(p.y, extent.height - p.x),
+        };
+    }
+
+    /// Canonical rect to screen.
+    pub fn rect_to_screen(self, extent: NodeSize, r: Rect) -> Rect {
+        let a = self.to_screen(extent, pt(r.x, r.y));
+        let b = self.to_screen(extent, pt(r.right(), r.bottom()));
+        return Rect {
+            x: a.x.min(b.x),
+            y: a.y.min(b.y),
+            w: (a.x - b.x).abs(),
+            h: (a.y - b.y).abs(),
+        };
+    }
+
+    /// What a screen direction means in the canonical frame.
+    pub fn motion(self, dir: ScreenDir) -> Motion {
+        let forward = self.screen_dir(Motion::Forward);
+        let backward = self.screen_dir(Motion::Backward);
+        let next = self.screen_dir(Motion::SideNext);
+        if dir == forward {
+            return Motion::Forward;
+        } else if dir == backward {
+            return Motion::Backward;
+        } else if dir == next {
+            return Motion::SideNext;
+        } else {
+            return Motion::SidePrev;
+        }
+    }
+
+    /// The screen direction of a canonical movement.
+    pub fn screen_dir(self, m: Motion) -> ScreenDir {
+        return match (self, m) {
+            (Flow::Down, Motion::Forward) | (Flow::Up, Motion::Backward) => ScreenDir::Down,
+            (Flow::Down, Motion::Backward) | (Flow::Up, Motion::Forward) => ScreenDir::Up,
+            (Flow::Down | Flow::Up, Motion::SideNext) => ScreenDir::Right,
+            (Flow::Down | Flow::Up, Motion::SidePrev) => ScreenDir::Left,
+            (Flow::Right, Motion::Forward) | (Flow::Left, Motion::Backward) => ScreenDir::Right,
+            (Flow::Right, Motion::Backward) | (Flow::Left, Motion::Forward) => ScreenDir::Left,
+            (Flow::Right | Flow::Left, Motion::SideNext) => ScreenDir::Down,
+            (Flow::Right | Flow::Left, Motion::SidePrev) => ScreenDir::Up,
+        };
+    }
+
+    /// The screen side of a node an edge attaches to.
+    pub fn screen_side(self, side: Side) -> ScreenDir {
+        return self.screen_dir(match side {
+            Side::Before => Motion::Backward,
+            Side::After => Motion::Forward,
+        });
+    }
+
+    pub(crate) fn title_at(self) -> TitleAt {
+        return match self {
+            Flow::Down => TitleAt::RankStart,
+            Flow::Up => TitleAt::RankEnd,
+            Flow::Right | Flow::Left => TitleAt::SideStart,
+        };
+    }
+
+    /// The side of a container's members that edges to the container itself
+    /// leave from (towards the title).
+    pub(crate) fn self_exit_side(self) -> Side {
+        return match self.title_at() {
+            TitleAt::RankEnd => Side::After,
+            _ => Side::Before,
+        };
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -105,9 +283,11 @@ pub struct LayoutConfig {
     pub position_iters: usize,
     /// Crossing cost multiplier for edges touching the selected layer.
     pub selected_weight: f64,
-    /// Ranks wider than this are split into several ranks (e.g. the screen
-    /// width). None disables splitting.
+    /// Ranks wider (along the side axis) than this are split into several
+    /// ranks (e.g. the screen extent along that axis). None disables splitting.
     pub max_rank_width: Option<f64>,
+    /// Screen direction of the rank axis.
+    pub flow: Flow,
 }
 
 impl Default for LayoutConfig {
@@ -125,6 +305,7 @@ impl Default for LayoutConfig {
             position_iters: 6,
             selected_weight: 4.,
             max_rank_width: None,
+            flow: Flow::Down,
         };
     }
 }
@@ -192,8 +373,10 @@ pub struct Island {
 
 #[derive(Clone, Debug, Default)]
 pub struct Layout {
+    /// Screen size.
     pub width: f64,
     pub height: f64,
+    pub flow: Flow,
     pub nodes: Vec<PlacedNode>,
     pub edges: Vec<PlacedEdge>,
     pub islands: Vec<Island>,
@@ -207,6 +390,42 @@ impl Layout {
     /// The primary (non-ghost) placement of a node.
     pub fn primary(&self, id: &NodeId) -> Option<&PlacedNode> {
         return self.nodes.iter().find(|n| &n.id.node == id && !n.ghost);
+    }
+
+    /// Canonical extents (side, rank) of the whole layout.
+    pub fn extent(&self) -> NodeSize {
+        return self.flow.canonical_size(NodeSize {
+            width: self.width,
+            height: self.height,
+        });
+    }
+
+    /// A screen point in the canonical frame: x is along the side axis, y
+    /// along the rank axis.
+    pub fn canonical(&self, p: Pt) -> Pt {
+        return self.flow.to_canonical(self.extent(), p);
+    }
+
+    /// Where an edge attaches to a placement, as drawn. Edges on the same side
+    /// of a node are ordered visually by `along`.
+    pub fn port(&self, edge: &EdgeId, at: &PlacementId) -> Option<Port> {
+        let node = self.node(at)?;
+        let placed = self.edges.iter().find(|e| &e.id == edge && (&e.source == at || &e.dest == at))?;
+        let p = self.canonical(if &placed.source == at {
+            *placed.points.first()?
+        } else {
+            *placed.points.last()?
+        });
+        let center = self.canonical(pt(node.rect.cx(), node.rect.cy()));
+        let side = if p.y <= center.y {
+            Side::Before
+        } else {
+            Side::After
+        };
+        return Some(Port {
+            side: side,
+            along: p.x,
+        });
     }
 }
 
@@ -303,10 +522,11 @@ impl<'a> Ctx<'a> {
 /// for every visible node (missing nodes get a default size). `previous` is
 /// used to keep the ordering stable across edits.
 pub fn layout(doc: &Document, sizes: &HashMap<NodeId, NodeSize>, config: &LayoutConfig, previous: Option<&Layout>) -> Layout {
-    let default_size = NodeSize {
+    let flow = config.flow;
+    let default_size = flow.canonical_size(NodeSize {
         width: 60.,
         height: 24.,
-    };
+    });
 
     // Visible nodes
     let visible: Vec<&NodeId> = doc.nodes.iter().filter(|n| doc.node_visible(n)).map(|n| &n.id).collect();
@@ -340,7 +560,7 @@ pub fn layout(doc: &Document, sizes: &HashMap<NodeId, NodeSize>, config: &Layout
     let mut placements = vec![];
     let mut primary_index: HashMap<NodeId, usize> = HashMap::new();
     for id in &visible {
-        let size = sizes.get(*id).cloned().unwrap_or(default_size);
+        let size = sizes.get(*id).map(|s| flow.canonical_size(*s)).unwrap_or(default_size);
         primary_index.insert((*id).clone(), placements.len());
         placements.push(Placement {
             id: PlacementId {
@@ -367,7 +587,7 @@ pub fn layout(doc: &Document, sizes: &HashMap<NodeId, NodeSize>, config: &Layout
                 },
                 parent: Some(primary_index[p]),
                 ghost: true,
-                size: sizes.get(*id).cloned().unwrap_or(default_size),
+                size: sizes.get(*id).map(|s| flow.canonical_size(*s)).unwrap_or(default_size),
             });
         }
     }
@@ -430,9 +650,12 @@ pub fn layout(doc: &Document, sizes: &HashMap<NodeId, NodeSize>, config: &Layout
     let mut prev_x = HashMap::new();
     let mut prev_y = HashMap::new();
     if let Some(prev) = previous {
+        // Previous positions in the canonical frame, so ordering survives a
+        // change of flow
         for n in &prev.nodes {
-            prev_x.insert(n.id.clone(), n.rect.cx());
-            prev_y.insert(n.id.clone(), n.rect.cy());
+            let c = prev.canonical(pt(n.rect.cx(), n.rect.cy()));
+            prev_x.insert(n.id.clone(), c.x);
+            prev_y.insert(n.id.clone(), c.y);
         }
     }
 
@@ -501,9 +724,9 @@ pub(crate) fn layout_container(ctx: &mut Ctx, container: Option<usize>, exits: V
         let rs = ranking.rank[member_index[&e.source]];
         let rd = ranking.rank[member_index[&e.dest]];
         let (source_side, dest_side) = if rs < rd {
-            (Side::Bottom, Side::Top)
+            (Side::After, Side::Before)
         } else {
-            (Side::Top, Side::Bottom)
+            (Side::Before, Side::After)
         };
         let inst = &ctx.instances[e.inst];
         if ctx.is_container(e.source) {
@@ -555,7 +778,7 @@ pub(crate) fn layout_container(ctx: &mut Ctx, container: Option<usize>, exits: V
                 child_exits.entry(*m).or_default().push(ExitInfo {
                     inst: *i,
                     member: inner,
-                    side: Side::Top,
+                    side: ctx.config.flow.self_exit_side(),
                     outgoing: false,
                     to_self: true,
                 });
@@ -565,7 +788,7 @@ pub(crate) fn layout_container(ctx: &mut Ctx, container: Option<usize>, exits: V
                 child_exits.entry(*m).or_default().push(ExitInfo {
                     inst: *i,
                     member: inner,
-                    side: Side::Top,
+                    side: ctx.config.flow.self_exit_side(),
                     outgoing: true,
                     to_self: true,
                 });
@@ -650,8 +873,12 @@ fn split_wide_ranks(ctx: &Ctx, members: &[usize], mut ranking: rank::Ranking) ->
 fn assemble(ctx: Ctx) -> Layout {
     let mut out = Layout::default();
     let root = &ctx.results[&None];
-    out.width = root.size.width;
-    out.height = root.size.height;
+    let flow = ctx.config.flow;
+    let extent = root.size;
+    let screen = flow.canonical_size(extent);
+    out.width = screen.width;
+    out.height = screen.height;
+    out.flow = flow;
 
     // Islands: assign global indices in a deterministic order (root first)
     let mut island_index: HashMap<(Option<usize>, usize), usize> = HashMap::new();
@@ -695,12 +922,12 @@ fn assemble(ctx: Ctx) -> Layout {
             };
             out.nodes.push(PlacedNode {
                 id: ctx.placements[*m].id.clone(),
-                rect: Rect {
+                rect: flow.rect_to_screen(extent, Rect {
                     x: origin.x + rect.x,
                     y: origin.y + rect.y,
                     w: rect.w,
                     h: rect.h,
-                },
+                }),
                 title_height: title_height,
                 ghost: ctx.placements[*m].ghost,
                 container: is_container,
@@ -741,7 +968,7 @@ fn assemble(ctx: Ctx) -> Layout {
         for piece in path.dest_stubs.iter().rev() {
             push_piece(&mut points, piece, true);
         }
-        let points = simplify(points);
+        let points = simplify(points.into_iter().map(|p| flow.to_screen(extent, p)).collect());
         let label = label_position(&points);
         out.edges.push(PlacedEdge {
             id: inst.edge.clone(),

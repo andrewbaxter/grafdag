@@ -7,6 +7,12 @@ use {
     },
     grafdag_core::{
         delete_node_actions,
+        layout::{
+            pt,
+            Motion,
+            ScreenDir,
+            Side,
+        },
         Action,
         Edge,
         Node,
@@ -15,14 +21,15 @@ use {
     lunk::ProcessingContext,
 };
 
+/// Direction along the side axis.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Dir {
-    Left,
-    Right,
+    Prev,
+    Next,
 }
 
 impl State {
-    /// Nodes in the same rank of the same island as `id`, left to right.
+    /// Nodes in the same rank of the same island as `id`, along the side axis.
     pub fn siblings(&self, id: &NodeId) -> Vec<NodeId> {
         let layout = self.layout.borrow();
         let Some(n) = layout.primary(id) else {
@@ -37,7 +44,31 @@ impl State {
         return rank.iter().map(|p| p.node.clone()).collect();
     }
 
-    /// Visible successors of a node, ordered left to right.
+    /// Visible links attached to one side of a node, in the order they're
+    /// drawn along that side. Links without a drawn port are omitted.
+    pub fn edges_on_side(&self, id: &NodeId, side: Side) -> Vec<(grafdag_core::EdgeId, NodeId)> {
+        let doc = self.doc.borrow();
+        let layout = self.layout.borrow();
+        let Some(here) = layout.primary(id).map(|n| n.id.clone()) else {
+            return vec![];
+        };
+        let mut out: Vec<(f64, grafdag_core::EdgeId, NodeId)> = doc.edges.iter().filter(|e| (&e.source == id || &e.dest == id) && doc.edge_visible(e)).filter_map(|e| {
+            let port = layout.port(&e.id, &here)?;
+            if port.side != side {
+                return None;
+            }
+            let other = if &e.source == id {
+                e.dest.clone()
+            } else {
+                e.source.clone()
+            };
+            Some((port.along, e.id.clone(), other))
+        }).collect();
+        out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.cmp(&b.1)));
+        return out.into_iter().map(|(_, e, n)| (e, n)).collect();
+    }
+
+    /// Visible successors of a node, ordered along the side axis.
     pub fn next_nodes(&self, id: &NodeId) -> Vec<NodeId> {
         let doc = self.doc.borrow();
         let mut out: Vec<NodeId> = doc.edges.iter().filter(|e| &e.source == id && doc.edge_visible(e)).map(|e| e.dest.clone()).collect();
@@ -45,7 +76,7 @@ impl State {
         return out;
     }
 
-    /// Visible predecessors of a node, ordered left to right.
+    /// Visible predecessors of a node, ordered along the side axis.
     pub fn prev_nodes(&self, id: &NodeId) -> Vec<NodeId> {
         let doc = self.doc.borrow();
         let mut out: Vec<NodeId> = doc.edges.iter().filter(|e| &e.dest == id && doc.edge_visible(e)).map(|e| e.source.clone()).collect();
@@ -53,14 +84,12 @@ impl State {
         return out;
     }
 
+    /// Sort nodes along the side axis.
     fn sort_by_x(&self, ids: &mut Vec<NodeId>) {
         let layout = self.layout.borrow();
         ids.dedup();
-        ids.sort_by(|a, b| {
-            let xa = layout.primary(a).map(|n| n.rect.x).unwrap_or(0.);
-            let xb = layout.primary(b).map(|n| n.rect.x).unwrap_or(0.);
-            xa.partial_cmp(&xb).unwrap()
-        });
+        let key = |id: &NodeId| layout.primary(id).map(|n| layout.canonical(pt(n.rect.cx(), n.rect.cy())).x).unwrap_or(0.);
+        ids.sort_by(|a, b| key(a).partial_cmp(&key(b)).unwrap());
     }
 
     /// Prefer the most recently selected candidate, else the first.
@@ -105,50 +134,83 @@ impl State {
 
     // Selection movement
 
-    pub fn cmd_sibling(&self, pc: &mut ProcessingContext, dir: Dir) {
-        self.follow.set(true);
-        let Some(start) = self.ensure_start(pc) else {
-            return;
-        };
-        let forward = dir == Dir::Right;
-        match self.sel_end.get() {
-            None => {
-                let sibs = self.siblings(&start);
-                let next = Self::cycle(&sibs, Some(&start), forward);
-                if next.as_ref() != Some(&start) {
-                    self.set_end(pc, next);
-                }
-            },
-            Some(end) => {
-                let sibs = self.siblings(&end);
-                let next = Self::cycle(&sibs, Some(&end), forward);
-                if next.as_ref() != Some(&start) {
-                    self.set_end(pc, next);
-                } else if sibs.len() > 2 {
-                    // Skip over the start node
-                    self.set_end(pc, Self::cycle(&sibs, Some(&start), forward));
-                }
-            },
+    /// An arrow key: its meaning depends on the layout's flow. Along the rank
+    /// axis it moves forward/backward (with shift: picks the end among the
+    /// start's successors/predecessors); along the side axis it cycles
+    /// siblings.
+    pub fn cmd_arrow(&self, pc: &mut ProcessingContext, dir: ScreenDir, shift: bool) {
+        let flow = self.doc.borrow().flow;
+        match (flow.motion(dir), shift) {
+            (Motion::Forward, false) => self.cmd_forward(pc),
+            (Motion::Forward, true) => self.cmd_select_next(pc),
+            (Motion::Backward, false) => self.cmd_backward(pc),
+            (Motion::Backward, true) => self.cmd_select_prev(pc),
+            (Motion::SideNext, _) => self.cmd_sibling(pc, Dir::Next),
+            (Motion::SidePrev, _) => self.cmd_sibling(pc, Dir::Prev),
         }
     }
 
-    /// Whether the end node is drawn below (Some(true)) or above (Some(false))
-    /// the start node; None if there's no end node or they're level.
-    fn selection_goes_down(&self) -> Option<bool> {
+    /// Rotate the layout's flow direction (down, right, up, left).
+    pub fn cmd_rotate_flow(&self, pc: &mut ProcessingContext) {
+        self.follow.set(true);
+        let next = self.doc.borrow().flow.next();
+        self.commit(pc, vec![Action::SetFlow(next)], None);
+    }
+
+    /// Cycle the selected link among the links on the same side of the start
+    /// node (each link counts, even several to the same node); the end node
+    /// follows. Links on the other side aren't siblings, and without a
+    /// selected link there's nothing to cycle.
+    pub fn cmd_sibling(&self, pc: &mut ProcessingContext, dir: Dir) {
+        self.follow.set(true);
+        let (Some(start), Some(cur)) = (self.sel_start.get(), self.sel_edge.get()) else {
+            return;
+        };
+        let side = {
+            let layout = self.layout.borrow();
+            let Some(port) = layout.primary(&start).and_then(|n| layout.port(&cur, &n.id)) else {
+                return;
+            };
+            port.side
+        };
+        let edges = self.edges_on_side(&start, side);
+        let Some(i) = edges.iter().position(|(id, _)| id == &cur) else {
+            return;
+        };
+        let n = edges.len();
+        let j = if dir == Dir::Next {
+            (i + 1) % n
+        } else {
+            (i + n - 1) % n
+        };
+        let (edge, other) = edges[j].clone();
+        self.set_end(pc, Some(other));
+        self.sel_edge.set(pc, Some(edge));
+    }
+
+    /// Whether the end node is placed after (Some(true)) or before
+    /// (Some(false)) the start node along the rank axis; None if there's no
+    /// end node or they're level.
+    fn selection_goes_forward(&self) -> Option<bool> {
         let (s, e) = self.selected_pair()?;
-        let sy = self.placed(&s)?.rect.cy();
-        let ey = self.placed(&e)?.rect.cy();
+        let layout = self.layout.borrow();
+        let rank_pos = |id: &NodeId| {
+            let n = layout.primary(id)?;
+            Some(layout.canonical(pt(n.rect.cx(), n.rect.cy())).y)
+        };
+        let sy = rank_pos(&s)?;
+        let ey = rank_pos(&e)?;
         if (sy - ey).abs() < 1. {
             return None;
         }
         return Some(ey > sy);
     }
 
-    /// Move forward (down). If the selection currently points up, this swaps
-    /// start and end instead.
+    /// Move forward along the rank axis. If the selection currently points
+    /// backward, this swaps start and end instead.
     pub fn cmd_forward(&self, pc: &mut ProcessingContext) {
         self.follow.set(true);
-        if self.selection_goes_down() == Some(false) {
+        if self.selection_goes_forward() == Some(false) {
             self.cmd_flip(pc);
             return;
         }
@@ -170,11 +232,11 @@ impl State {
         }
     }
 
-    /// Move backward (up). If the selection currently points down, this swaps
-    /// start and end instead.
+    /// Move backward along the rank axis. If the selection currently points
+    /// forward, this swaps start and end instead.
     pub fn cmd_backward(&self, pc: &mut ProcessingContext) {
         self.follow.set(true);
-        if self.selection_goes_down() == Some(true) {
+        if self.selection_goes_forward() == Some(true) {
             self.cmd_flip(pc);
             return;
         }
@@ -267,6 +329,22 @@ impl State {
         }
     }
 
+    /// Make the node's first layer the current layer if the node isn't in the
+    /// current one (used when a node is clicked).
+    pub fn activate_node_layer(&self, pc: &mut ProcessingContext, id: &NodeId) {
+        let target = {
+            let doc = self.doc.borrow();
+            let Some(node) = doc.node(id) else {
+                return;
+            };
+            if node.layers.is_empty() || doc.selected_layer.as_ref().map(|l| node.layers.contains(l)).unwrap_or(false) {
+                return;
+            }
+            node.layers[0].clone()
+        };
+        self.commit(pc, vec![Action::SelectLayer(Some(target))], None);
+    }
+
     // Editing
 
     fn selected_pair(&self) -> Option<(NodeId, NodeId)> {
@@ -299,30 +377,30 @@ impl State {
         }], None);
     }
 
+    /// Delete the selected link.
     pub fn cmd_unlink(&self, pc: &mut ProcessingContext) {
-        let Some((s, e)) = self.selected_pair() else {
+        let Some(edge) = self.sel_edge.get() else {
             return;
         };
-        let actions: Vec<Action> = self.doc.borrow().edges_between(&s, &e).map(|x| Action::EdgeDelete(x.id.clone())).collect();
-        self.commit(pc, actions, None);
+        self.commit(pc, vec![Action::EdgeDelete(edge)], None);
     }
 
+    /// Reverse the selected link.
     pub fn cmd_reverse(&self, pc: &mut ProcessingContext) {
-        let Some((s, e)) = self.selected_pair() else {
+        let Some(edge) = self.sel_edge.get() else {
             return;
         };
-        let actions: Vec<Action> = self.doc.borrow().edges_between(&s, &e).map(|x| {
-            let mut x = x.clone();
-            std::mem::swap(&mut x.source, &mut x.dest);
-            Action::EdgeModify(x)
-        }).collect();
-        self.commit(pc, actions, None);
+        let Some(mut x) = self.doc.borrow().edge(&edge).cloned() else {
+            return;
+        };
+        std::mem::swap(&mut x.source, &mut x.dest);
+        self.commit(pc, vec![Action::EdgeModify(x)], None);
     }
 
     /// Whether new links from `from` should point towards `from` (true) rather
     /// than away, based on the direction of the edge between the selected
     /// nodes.
-    fn inward_direction(&self) -> bool {
+    pub fn inward_direction(&self) -> bool {
         let Some((s, e)) = self.selected_pair() else {
             return false;
         };
@@ -407,6 +485,26 @@ impl State {
         self.mode.set(pc, Mode::EditNode(id));
     }
 
+    /// Whether a new sibling would be linked to something (vs. becoming a new
+    /// island): the end node's sibling is linked from the start node; a lone
+    /// start node's sibling is linked from its predecessor.
+    pub fn sibling_possible(&self) -> bool {
+        return match (self.sel_start.get(), self.sel_end.get()) {
+            (Some(_), Some(_)) => true,
+            (Some(s), None) => !self.prev_nodes(&s).is_empty(),
+            (None, _) => false,
+        };
+    }
+
+    /// Create an unlinked node (a new island), select it and edit it.
+    pub fn cmd_new_island(&self, pc: &mut ProcessingContext) {
+        self.follow.set(true);
+        let id = self.create_linked(pc, None, &NodeId("".into()), false);
+        self.set_start(pc, Some(id.clone()));
+        self.set_end(pc, None);
+        self.mode.set(pc, Mode::EditNode(id));
+    }
+
     /// Create a node linked from the start node (a sibling of the end node),
     /// select it as the end node and edit it.
     pub fn cmd_new_sibling(&self, pc: &mut ProcessingContext) {
@@ -469,11 +567,7 @@ impl State {
     }
 
     pub fn cmd_edit_link(&self, pc: &mut ProcessingContext) {
-        let Some((s, e)) = self.selected_pair() else {
-            return;
-        };
-        let edge = self.doc.borrow().edges_between(&s, &e).next().map(|x| x.id.clone());
-        if let Some(edge) = edge {
+        if let Some(edge) = self.sel_edge.get() {
             self.mode.set(pc, Mode::EditEdge(edge));
         }
     }

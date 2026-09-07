@@ -41,6 +41,7 @@ pub enum Action {
     LayerDelete(LayerId),
     LayerModify(Layer),
     SelectLayer(Option<LayerId>),
+    SetFlow(crate::layout::Flow),
 }
 
 /// Identifies the kind of modification, for coalescing successive edits (e.g.
@@ -115,6 +116,10 @@ pub fn apply_action(doc: &mut Document, action: Action) -> Option<Action> {
         Action::SelectLayer(layer) => {
             let old = std::mem::replace(&mut doc.selected_layer, layer);
             return Some(Action::SelectLayer(old));
+        },
+        Action::SetFlow(flow) => {
+            let old = std::mem::replace(&mut doc.flow, flow);
+            return Some(Action::SetFlow(old));
         },
     }
 }

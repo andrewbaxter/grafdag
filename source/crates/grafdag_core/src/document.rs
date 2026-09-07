@@ -66,6 +66,9 @@ pub struct Document {
     pub nodes: Vec<Node>,
     #[serde(default)]
     pub edges: Vec<Edge>,
+    /// Screen direction of the layout's rank axis.
+    #[serde(default)]
+    pub flow: crate::layout::Flow,
 }
 
 impl Document {

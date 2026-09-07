@@ -19,6 +19,7 @@ use {
         Pt,
         Rect,
         Side,
+        TitleAt,
     },
     std::collections::HashMap,
 };
@@ -74,9 +75,9 @@ pub(crate) fn position_container(
         let rs = ranking.rank[member_index[s]];
         let rd = ranking.rank[member_index[d]];
         let (ss, ds) = if rs < rd {
-            (Side::Bottom, Side::Top)
+            (Side::After, Side::Before)
         } else {
-            (Side::Top, Side::Bottom)
+            (Side::Before, Side::After)
         };
         *port_counts.entry((*s, ss)).or_default() += 1;
         *port_counts.entry((*d, ds)).or_default() += 1;
@@ -85,8 +86,8 @@ pub(crate) fn position_container(
         *port_counts.entry((x.member, x.side)).or_default() += 1;
     }
     for (_, m) in self_loops {
-        *port_counts.entry((*m, Side::Top)).or_default() += 1;
-        *port_counts.entry((*m, Side::Bottom)).or_default() += 1;
+        *port_counts.entry((*m, Side::Before)).or_default() += 1;
+        *port_counts.entry((*m, Side::After)).or_default() += 1;
     }
     let mut sizes: HashMap<usize, NodeSize> = HashMap::new();
     for m in members {
@@ -95,7 +96,7 @@ pub(crate) fn position_container(
         } else {
             let mut s = ctx.placements[*m].size;
             let ports =
-                port_counts.get(&(*m, Side::Top)).cloned().unwrap_or(0).max(port_counts.get(&(*m, Side::Bottom)).cloned().unwrap_or(0));
+                port_counts.get(&(*m, Side::Before)).cloned().unwrap_or(0).max(port_counts.get(&(*m, Side::After)).cloned().unwrap_or(0));
             if ports > 0 {
                 let min_w = 2. * config.port_margin + (ports as f64 - 1.) * config.port_gap;
                 s.width = s.width.max(min_w);
@@ -153,8 +154,8 @@ pub(crate) fn position_container(
             };
             let weight = ctx.instances[x.inst].weight;
             let exit_rank = match x.side {
-                Side::Top => 0,
-                Side::Bottom => n_ranks + 1,
+                Side::Before => 0,
+                Side::After => n_ranks + 1,
             };
             let exit = l.add_node(LNode {
                 kind: LKind::Exit {
@@ -171,8 +172,8 @@ pub(crate) fn position_container(
                 down: vec![],
             });
             let (upper, lower) = match x.side {
-                Side::Top => (exit, *lm),
-                Side::Bottom => (*lm, exit),
+                Side::Before => (exit, *lm),
+                Side::After => (*lm, exit),
             };
             let edges = add_chain(&mut l, x.inst, upper, lower, weight);
             chains.push(Chain {
@@ -246,23 +247,50 @@ pub(crate) fn position_container(
         content_h = content_h.max(island.height);
     }
 
-    // Container box
+    // Container box. The title strip is at the top of the box on screen; where
+    // that is in the canonical frame depends on the flow.
     let (origin, size, title_height) = match container {
         None => (pt(0., 0.), NodeSize {
             width: content_w,
             height: content_h,
         }, 0.),
         Some(c) => {
-            let text = ctx.placements[c].size;
+            // Title text box on screen
+            let text = config.flow.canonical_size(ctx.placements[c].size);
             let pad = config.container_pad;
-            let inner_w = content_w.max(text.width);
-            let width = inner_w + 2. * pad;
-            let height = text.height + config.title_gap + content_h + pad;
-            (pt(pad + (inner_w - content_w) / 2., text.height + config.title_gap), NodeSize {
-                width: width,
-                height: height,
-            }, text.height)
+            match config.flow.title_at() {
+                TitleAt::RankStart => {
+                    let inner_w = content_w.max(text.width);
+                    (pt(pad + (inner_w - content_w) / 2., text.height + config.title_gap), NodeSize {
+                        width: inner_w + 2. * pad,
+                        height: text.height + config.title_gap + content_h + pad,
+                    }, text.height)
+                },
+                TitleAt::RankEnd => {
+                    let inner_w = content_w.max(text.width);
+                    (pt(pad + (inner_w - content_w) / 2., pad), NodeSize {
+                        width: inner_w + 2. * pad,
+                        height: pad + content_h + config.title_gap + text.height,
+                    }, text.height)
+                },
+                TitleAt::SideStart => {
+                    let inner_h = content_h.max(text.width);
+                    (pt(text.height + config.title_gap, pad + (inner_h - content_h) / 2.), NodeSize {
+                        width: text.height + config.title_gap + content_w + pad,
+                        height: inner_h + 2. * pad,
+                    }, text.height)
+                },
+            }
         },
+    };
+    // Where an edge to the container itself ends (the title strip's inner
+    // edge), given the last point of its stub
+    let title_end = |last: Pt| -> Pt {
+        match config.flow.title_at() {
+            TitleAt::RankStart => pt(last.x, title_height),
+            TitleAt::RankEnd => pt(last.x, size.height - title_height),
+            TitleAt::SideStart => pt(title_height, last.y),
+        }
     };
 
     // Emit results
@@ -340,16 +368,15 @@ pub(crate) fn position_container(
                 },
                 ChainKind::Exit { side, outgoing, to_self } => {
                     // Orient from the member outwards
-                    if side == Side::Top {
+                    if side == Side::Before {
                         points.reverse();
-                        let last = points.last().cloned().unwrap();
-                        if to_self {
-                            points.push(pt(last.x, title_height));
-                        } else {
-                            points.push(pt(last.x, 0.));
-                        }
+                    }
+                    let last = points.last().cloned().unwrap();
+                    if to_self {
+                        points.push(title_end(last));
+                    } else if side == Side::Before {
+                        points.push(pt(last.x, 0.));
                     } else {
-                        let last = points.last().cloned().unwrap();
                         points.push(pt(last.x, size.height));
                     }
                     let piece = PathPiece {

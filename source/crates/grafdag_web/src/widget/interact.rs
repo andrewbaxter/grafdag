@@ -1,13 +1,11 @@
 //! Keyboard and mouse handling.
 use {
-    super::{
-        commands::Dir,
-        state::{
-            Mode,
-            SearchTarget,
-            State,
-        },
+    super::state::{
+        Mode,
+        SearchTarget,
+        State,
     },
+    grafdag_core::layout::ScreenDir,
     gloo_events::{
         EventListener,
         EventListenerOptions,
@@ -62,12 +60,11 @@ pub fn handle_key(state: &Rc<State>, ev: &KeyboardEvent) -> bool {
             return;
         }
         match key.as_str() {
-            "ArrowLeft" => state.cmd_sibling(pc, Dir::Left),
-            "ArrowRight" => state.cmd_sibling(pc, Dir::Right),
-            "ArrowDown" if shift => state.cmd_select_next(pc),
-            "ArrowUp" if shift => state.cmd_select_prev(pc),
-            "ArrowDown" => state.cmd_forward(pc),
-            "ArrowUp" => state.cmd_backward(pc),
+            // Arrows are relative to the layout's flow direction
+            "ArrowLeft" => state.cmd_arrow(pc, ScreenDir::Left, shift),
+            "ArrowRight" => state.cmd_arrow(pc, ScreenDir::Right, shift),
+            "ArrowDown" => state.cmd_arrow(pc, ScreenDir::Down, shift),
+            "ArrowUp" => state.cmd_arrow(pc, ScreenDir::Up, shift),
             "PageDown" => state.cmd_island(pc, true),
             "PageUp" => state.cmd_island(pc, false),
             "Tab" => state.cmd_toggle_panel(pc),
@@ -77,6 +74,7 @@ pub fn handle_key(state: &Rc<State>, ev: &KeyboardEvent) -> bool {
             "r" => state.cmd_reverse(pc),
             "n" => state.cmd_new_next(pc),
             "s" => state.cmd_new_sibling(pc),
+            "N" => state.cmd_new_island(pc),
             "Delete" | "Backspace" => state.cmd_delete(pc),
             "e" | "Enter" => state.cmd_edit(pc),
             "E" => state.cmd_edit_start(pc),

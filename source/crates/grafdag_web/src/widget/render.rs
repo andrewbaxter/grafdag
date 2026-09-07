@@ -9,6 +9,7 @@ use {
         },
         state::{
             Measured,
+            Overlay,
             State,
         },
     },
@@ -18,6 +19,8 @@ use {
         layout::{
             Layout,
             LayoutConfig,
+            Motion,
+            ScreenDir,
             NodeSize,
             PlacementId,
             Pt,
@@ -174,6 +177,8 @@ pub type EdgeKey = (EdgeId, PlacementId, PlacementId);
 /// A drawn edge: path (and label) elements plus animated geometry and opacity.
 pub struct EdgeView {
     pub el: El,
+    /// Invisible wide path for clicking.
+    pub hit: El,
     pub label: Option<El>,
     pub geom: HistPrim<EdgeGeom>,
     pub opacity: HistPrim<f64>,
@@ -231,8 +236,10 @@ fn path_d(points: &[Pt]) -> String {
     return out;
 }
 
-fn write_edge_geom(path: &El, label: Option<&El>, g: &EdgeGeom) {
-    path.ref_attr("d", &path_d(&g.points));
+fn write_edge_geom(path: &El, hit: &El, label: Option<&El>, g: &EdgeGeom) {
+    let d = path_d(&g.points);
+    path.ref_attr("d", &d);
+    hit.ref_attr("d", &d);
     if let Some(l) = label {
         set_style(l, "left", &px(g.label.x + WORLD_MARGIN));
         set_style(l, "top", &px(g.label.y + WORLD_MARGIN));
@@ -355,6 +362,7 @@ fn make_node_el(state: &Weak<State>, id: &PlacementId) -> El {
             ev.stop_propagation();
             ev.prevent_default();
             state.eg.event(|pc| {
+                state.activate_node_layer(pc, &id);
                 if button == 0 {
                     if state.sel_start.get().as_ref() == Some(&id) {
                         state.set_start(pc, None);
@@ -424,8 +432,13 @@ fn make_node_view(pc: &mut ProcessingContext, state: &Rc<State>, id: &PlacementI
     let opacity = HistPrim::new(pc, state.fade.get());
     // These links apply animation steps (the immediate paths write the DOM
     // directly)
-    let links = vec![link!((_pc = pc), (rect = rect.clone()), (), (e = e.weak()) {
+    let links = vec![link!((_pc = pc), (rect = rect.clone()), (), (e = e.weak(), state = Rc::downgrade(state), id = id.clone()) {
         write_rect(&e.upgrade()?, &rect.get());
+        // Overlay buttons follow the focused node's primary placement
+        let state = state.upgrade()?;
+        if state.focus_node().as_ref() == Some(&id.node) && state.layout.borrow().primary(&id.node).map(|p| &p.id == id).unwrap_or(false) {
+            place_overlay(&state, Some(&rect.get()));
+        }
     }), link!((_pc = pc), (opacity = opacity.clone()), (), (e = e.weak()) {
         write_opacity(&e.upgrade()?, opacity.get());
     })];
@@ -626,11 +639,58 @@ fn apply_layout(pc: &mut ProcessingContext, state: &Rc<State>, layout: &Layout, 
         if !render.edges.contains_key(&key) {
             let p = svg_el("path").classes(&["gd_edge"]);
             p.ref_attr("data-edge", &e.id.0);
+            let hit = svg_el("path").classes(&["gd_edge_hit"]);
+            hit.ref_attr("data-edge", &e.id.0);
+            // Clicking a link selects its ends (start = source, end = dest)
+            hit.ref_on_with_options("mousedown", EventListenerOptions::enable_prevent_default(), {
+                let state = Rc::downgrade(state);
+                let id = e.id.clone();
+                move |ev| {
+                    let Some(state) = state.upgrade() else {
+                        return;
+                    };
+                    let Some(mev) = ev.dyn_ref::<web_sys::MouseEvent>() else {
+                        return;
+                    };
+                    if mev.button() == 1 {
+                        return;
+                    }
+                    ev.stop_propagation();
+                    ev.prevent_default();
+                    state.eg.event(|pc| {
+                        state.set_edge(pc, &id);
+                    });
+                }
+            });
+            hit.ref_on_with_options("contextmenu", EventListenerOptions::enable_prevent_default(), |ev| {
+                ev.prevent_default();
+                ev.stop_propagation();
+            });
+            for (event, entering) in [("mouseenter", true), ("mouseleave", false)] {
+                hit.ref_on(event, {
+                    let state = Rc::downgrade(state);
+                    let id = e.id.clone();
+                    move |_| {
+                        let Some(state) = state.upgrade() else {
+                            return;
+                        };
+                        state.eg.event(|pc| {
+                            if entering {
+                                state.hover_edge.set(pc, Some(id.clone()));
+                            } else if state.hover_edge.get().as_ref() == Some(&id) {
+                                state.hover_edge.set(pc, None);
+                            }
+                        });
+                    }
+                });
+            }
             paths_el.ref_push(p.clone());
+            paths_el.ref_push(hit.clone());
             let geom_prim = HistPrim::new(pc, geom.clone());
             let opacity = HistPrim::new(pc, state.fade.get());
             render.edges.insert(key.clone(), EdgeView {
                 el: p,
+                hit: hit,
                 label: None,
                 geom: geom_prim,
                 opacity: opacity,
@@ -660,10 +720,11 @@ fn apply_layout(pc: &mut ProcessingContext, state: &Rc<State>, layout: &Layout, 
         }
         // (Re)create the links so they see the current label element
         let path_weak = v.el.weak();
+        let hit_weak = v.hit.weak();
         let label_weak = v.label.as_ref().map(|l| l.weak());
-        v._links = vec![link!((_pc = pc), (geom = v.geom.clone()), (), (path = path_weak.clone(), label = label_weak.clone()) {
+        v._links = vec![link!((_pc = pc), (geom = v.geom.clone()), (), (path = path_weak.clone(), hit = hit_weak, label = label_weak.clone()) {
             let label = label.as_ref().and_then(|l| l.upgrade());
-            write_edge_geom(&path.upgrade()?, label.as_ref(), &geom.get());
+            write_edge_geom(&path.upgrade()?, &hit.upgrade()?, label.as_ref(), &geom.get());
         }), link!((_pc = pc), (opacity = v.opacity.clone()), (), (path = path_weak, label = label_weak) {
             write_opacity(&path.upgrade()?, opacity.get());
             if let Some(l) = label.as_ref().and_then(|l| l.upgrade()) {
@@ -678,14 +739,16 @@ fn apply_layout(pc: &mut ProcessingContext, state: &Rc<State>, layout: &Layout, 
         };
         let same_shape = v.geom.get().points.len() == geom.points.len();
         let path = v.el.clone();
+        let hit = v.hit.clone();
         let label = v.label.clone();
         let fresh = v.fresh;
-        set_animated(pc, state, &v.geom, geom, same_shape && !fresh, |g| write_edge_geom(&path, label.as_ref(), g));
+        set_animated(pc, state, &v.geom, geom, same_shape && !fresh, |g| write_edge_geom(&path, &hit, label.as_ref(), g));
     }
     let stale: Vec<EdgeKey> = render.edges.keys().filter(|k| !wanted.contains(k)).cloned().collect();
     for k in stale {
         if let Some(v) = render.edges.remove(&k) {
             v.el.ref_replace(vec![]);
+            v.hit.ref_replace(vec![]);
             if let Some(l) = v.label {
                 l.ref_replace(vec![]);
             }
@@ -697,17 +760,33 @@ fn apply_layout(pc: &mut ProcessingContext, state: &Rc<State>, layout: &Layout, 
 }
 
 /// Selection borders and fading. Selected nodes and their edges are unfaded;
-/// while hovering a node, the hovered node and its edges are the unfaded ones
-/// instead. `animate` eases opacity changes (used for everything but hover).
+/// a hovered node (and its edges) or a hovered link (and its ends) are unfaded
+/// too, in addition to the selection. `animate` eases opacity changes (used
+/// for layer and fade level changes, not for selection or hover).
 fn apply_selection(pc: &mut ProcessingContext, state: &Rc<State>, animate: bool) {
     let mut render = state.render.borrow_mut();
     let start = state.sel_start.get();
     let end = state.sel_end.get();
+    let sel_edge = state.sel_edge.get();
     let hover = state.hover.get();
-    let active: Vec<NodeId> = match &hover {
-        Some(h) => vec![h.clone()],
-        None => start.iter().chain(end.iter()).cloned().collect(),
-    };
+    let hover_edge = state.hover_edge.get();
+    // Nodes whose incident edges are also active: the focused end of the
+    // selection (the end node if there is one, else the start node) and a
+    // hovered node.
+    let spreading: Vec<NodeId> = end.as_ref().or(start.as_ref()).into_iter().chain(hover.iter()).cloned().collect();
+    // All active nodes: the spreading set plus every selected node and the ends
+    // of a hovered edge. Those are unfaded themselves, but their other edges are
+    // not (highlighting only ever reaches immediate neighbors).
+    let mut active = spreading.clone();
+    active.extend(start.iter().chain(end.iter()).cloned());
+    if let Some(h) = &hover_edge {
+        for (key, v) in render.edges.iter() {
+            if &key.0 == h {
+                active.push(v.source.clone());
+                active.push(v.dest.clone());
+            }
+        }
+    }
     let fade = state.fade.get();
     let fade_secondary = state.fade_secondary.get();
     let target = |is_active: bool, secondary: bool| {
@@ -732,13 +811,17 @@ fn apply_selection(pc: &mut ProcessingContext, state: &Rc<State>, animate: bool)
         set_animated(pc, state, &v.opacity, target(is_active, v.secondary), animate && !v.fresh, |o| write_opacity(&e, *o));
         v.fresh = false;
     }
-    for v in render.edges.values_mut() {
-        let between = match (&start, &end) {
-            (Some(a), Some(b)) => (&v.source == a && &v.dest == b) || (&v.source == b && &v.dest == a),
-            _ => false,
-        };
-        let is_active = active.contains(&v.source) || active.contains(&v.dest);
-        v.el.ref_modify_classes(&[("gd_edge_between", between && hover.is_none()), ("gd_active", is_active)]);
+    // Overlay buttons next to the focused node
+    let focus_rect = state.focus_node().and_then(|f| {
+        let p = state.layout.borrow().primary(&f)?.id.clone();
+        Some(render.nodes.get(&p)?.rect.get())
+    });
+    place_overlay(state, focus_rect.as_ref());
+    for (key, v) in render.edges.iter_mut() {
+        let selected = sel_edge.as_ref() == Some(&key.0);
+        let is_active =
+            spreading.contains(&v.source) || spreading.contains(&v.dest) || hover_edge.as_ref() == Some(&key.0);
+        v.el.ref_modify_classes(&[("gd_edge_selected", selected), ("gd_active", is_active)]);
         let path = v.el.clone();
         let label = v.label.clone();
         set_animated(pc, state, &v.opacity, target(is_active, v.secondary), animate && !v.fresh, |o| {
@@ -749,6 +832,76 @@ fn apply_selection(pc: &mut ProcessingContext, state: &Rc<State>, animate: bool)
         });
         v.fresh = false;
     }
+}
+
+// Overlay
+
+fn make_overlay_button(state: &Rc<State>, icon: &str, title: &str, cb: impl Fn(&State, &mut ProcessingContext) + 'static) -> El {
+    let b = super::toolbar::icon_button(state, icon, title, cb);
+    b.ref_classes(&["gd_overlay_button"]);
+    // Don't let the canvas treat this as a click on empty space
+    b.ref_on_with_options("mousedown", EventListenerOptions::enable_prevent_default(), |ev| {
+        ev.stop_propagation();
+        ev.prevent_default();
+    });
+    b.ref_on_with_options("contextmenu", EventListenerOptions::enable_prevent_default(), |ev| {
+        ev.prevent_default();
+        ev.stop_propagation();
+    });
+    return b;
+}
+
+fn build_overlay(state: &Rc<State>) -> El {
+    let sibling = make_overlay_button(state, "add", "New sibling node (s)", |s, pc| s.cmd_new_sibling(pc));
+    sibling.ref_attr("data-side", "right");
+    let next = make_overlay_button(state, "add", "New node linked from this one (n)", |s, pc| s.cmd_new_next(pc));
+    next.ref_attr("data-side", "bottom");
+    let overlay = el("div").classes(&["gd_overlay", "gd_overlay_hidden"]).push(sibling.clone()).push(next.clone());
+    *state.overlay.borrow_mut() = Some(Overlay {
+        el: overlay.clone(),
+        sibling: sibling,
+        next: next,
+    });
+    return overlay;
+}
+
+/// Position the overlay buttons around the focused node's box (`rect`), or
+/// hide them if there's no focused node. The sibling button sits on the
+/// node's side-axis side; the next button on its forward side (backward, when
+/// the selected link points backwards so a new link would too).
+pub fn place_overlay(state: &State, rect: Option<&Rect4>) {
+    let overlay = state.overlay.borrow();
+    let Some(ov) = overlay.as_ref() else {
+        return;
+    };
+    let Some(r) = rect else {
+        ov.el.ref_modify_classes(&[("gd_overlay_hidden", true)]);
+        return;
+    };
+    ov.el.ref_modify_classes(&[("gd_overlay_hidden", false)]);
+    let flow = state.doc.borrow().flow;
+    ov.sibling.ref_modify_classes(&[("gd_overlay_hidden", !state.sibling_possible())]);
+    place_overlay_button(&ov.sibling, r, flow.screen_dir(Motion::SideNext));
+    let inward = state.sel_end.get().is_some() && state.inward_direction();
+    place_overlay_button(&ov.next, r, flow.screen_dir(if inward {
+        Motion::Backward
+    } else {
+        Motion::Forward
+    }));
+}
+
+/// Anchor an overlay button to the middle of one side of a box.
+fn place_overlay_button(button: &El, r: &Rect4, side: ScreenDir) {
+    let [x, y, w, h] = r.0;
+    let (name, ax, ay) = match side {
+        ScreenDir::Right => ("right", x + w, y + h / 2.),
+        ScreenDir::Left => ("left", x, y + h / 2.),
+        ScreenDir::Down => ("bottom", x + w / 2., y + h),
+        ScreenDir::Up => ("top", x + w / 2., y),
+    };
+    button.ref_attr("data-side", name);
+    set_style(button, "left", &px(ax + WORLD_MARGIN));
+    set_style(button, "top", &px(ay + WORLD_MARGIN));
 }
 
 pub fn build_canvas(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
@@ -773,11 +926,12 @@ pub fn build_canvas(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
     svg.ref_push(paths.clone());
     let nodes = el("div").classes(&["gd_nodes"]);
     let labels = el("div").classes(&["gd_labels"]);
-    let world = el("div").classes(&["gd_world"]).push(svg.clone()).push(labels.clone()).push(nodes.clone());
+    let overlay = build_overlay(state);
+    let world = el("div").classes(&["gd_world"]).push(svg.clone()).push(labels.clone()).push(nodes.clone()).push(overlay);
     let canvas = el("div").classes(&["gd_canvas"]).push(world.clone());
 
     // Layout when the document (or the available width) changes
-    canvas.ref_own(|_| link!((pc = pc), (version = state.doc_version.clone(), width = state.layout_width.clone()), (layout = state.layout.clone()), (state = Rc::downgrade(state), nodes = nodes.clone()) {
+    canvas.ref_own(|_| link!((pc = pc), (version = state.doc_version.clone(), width = state.layout_width.clone(), height = state.layout_height.clone()), (layout = state.layout.clone()), (state = Rc::downgrade(state), nodes = nodes.clone()) {
         let _ = version;
         let state = state.upgrade()?;
         let sizes = sync_nodes(pc, &state, nodes);
@@ -785,8 +939,14 @@ pub fn build_canvas(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
         let new_layout = {
             let doc = state.doc.borrow();
             let mut config = LayoutConfig::default();
-            // Ranks wider than the canvas are wrapped
-            config.max_rank_width = Some((width.get() as f64 - 2. * WORLD_MARGIN).max(200.));
+            config.flow = doc.flow;
+            // Ranks wider than the canvas (along the side axis) are wrapped
+            let side_extent = if doc.flow.horizontal() {
+                height.get()
+            } else {
+                width.get()
+            };
+            config.max_rank_width = Some((side_extent as f64 - 2. * WORLD_MARGIN).max(200.));
             grafdag_core::layout::layout(&doc, &sizes, &config, Some(&previous))
         };
         layout.set(pc, Rc::new(new_layout));
@@ -798,25 +958,46 @@ pub fn build_canvas(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
         apply_layout(pc, &state, &layout.borrow(), nodes, svg, paths, labels);
     }));
 
-    // Selection classes, fading and following (eased)
-    canvas.ref_own(|_| link!((pc = pc), (start = state.sel_start.clone(), end = state.sel_end.clone(), fade = state.fade.clone(), fade_secondary = state.fade_secondary.clone(), layout = state.layout.clone()), (pan = state.pan.clone()), (state = Rc::downgrade(state)) {
-        let _ = (start, end, fade, fade_secondary, layout, pan);
+    // Following the selection after a re-layout or selection change
+    canvas.ref_own(|_| link!((pc = pc), (start = state.sel_start.clone(), end = state.sel_end.clone(), layout = state.layout.clone()), (pan = state.pan.clone()), (state = Rc::downgrade(state)) {
+        let _ = (start, end, layout, pan);
         let state = state.upgrade()?;
-        apply_selection(pc, &state, true);
         state.follow_selection(pc);
     }));
 
-    // Hover fading (not eased)
-    canvas.ref_own(|_| link!((pc = pc), (hover = state.hover.clone()), (), (state = Rc::downgrade(state)) {
-        let _ = hover;
+    // Selection and hover: immediate (only layer/fade changes ease)
+    canvas.ref_own(|_| link!((pc = pc), (start = state.sel_start.clone(), end = state.sel_end.clone(), sel_edge = state.sel_edge.clone(), hover = state.hover.clone(), hover_edge = state.hover_edge.clone()), (mode = state.mode.clone()), (state = Rc::downgrade(state)) {
+        let _ = (start, end, sel_edge, hover, hover_edge);
         let state = state.upgrade()?;
         apply_selection(pc, &state, false);
+        // Editors close when their subject is deselected
+        match mode.get() {
+            super::state::Mode::EditNode(id) => {
+                if state.sel_start.get().as_ref() != Some(&id) && state.sel_end.get().as_ref() != Some(&id) {
+                    mode.set(pc, super::state::Mode::Layers);
+                }
+            },
+            super::state::Mode::EditEdge(id) => {
+                if state.sel_edge.get().as_ref() != Some(&id) {
+                    mode.set(pc, super::state::Mode::Layers);
+                }
+            },
+            _ => { },
+        }
+    }));
+
+    // Fade level changes ease
+    canvas.ref_own(|_| link!((pc = pc), (fade = state.fade.clone(), fade_secondary = state.fade_secondary.clone()), (), (state = Rc::downgrade(state)) {
+        let _ = (fade, fade_secondary);
+        let state = state.upgrade()?;
+        apply_selection(pc, &state, true);
     }));
 
     // View transform
     canvas.ref_own(|_| link!((_pc = pc), (zoom = state.zoom.clone(), pan = state.pan.clone()), (), (world = world.clone()) {
         let (px, py) = pan.get();
         set_style(world, "transform", &format!("translate({}px, {}px) scale({})", px, py, zoom.get()));
+        set_style(world, "--gd-zoom", &zoom.get().to_string());
     }));
 
     canvas.ref_on_resize({
@@ -825,9 +1006,10 @@ pub fn build_canvas(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
             if let Some(state) = state.upgrade() {
                 state.viewport.set((w, h));
                 // Round so small resizes don't relayout
-                let rounded = ((w / 100.).floor() * 100.) as u32;
+                let round = |v: f64| ((v / 100.).floor() * 100.) as u32;
                 state.eg.event(|pc| {
-                    state.layout_width.set(pc, rounded);
+                    state.layout_width.set(pc, round(w));
+                    state.layout_height.set(pc, round(h));
                 });
             }
         }

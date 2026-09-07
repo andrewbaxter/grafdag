@@ -44,12 +44,19 @@ pub fn build_toolbar(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
     }));
     let pair_buttons = vec![
         icon_button(state, "link", "Link start to end (l)", |s, pc| s.cmd_link(pc)),
-        icon_button(state, "link_off", "Unlink start and end (u)", |s, pc| s.cmd_unlink(pc)),
-        icon_button(state, "swap_vert", "Reverse link (r)", |s, pc| s.cmd_reverse(pc)),
     ];
     for b in &pair_buttons {
         b.ref_own(|b| link!((_pc = pc), (start = state.sel_start.clone(), end = state.sel_end.clone()), (), (b = b.weak()) {
             b.upgrade()?.ref_modify_classes(&[("gd_button_disabled", start.get().is_none() || end.get().is_none())]);
+        }));
+    }
+    let edge_buttons = vec![
+        icon_button(state, "link_off", "Delete selected link (u)", |s, pc| s.cmd_unlink(pc)),
+        icon_button(state, "swap_vert", "Reverse selected link (r)", |s, pc| s.cmd_reverse(pc)),
+    ];
+    for b in &edge_buttons {
+        b.ref_own(|b| link!((_pc = pc), (edge = state.sel_edge.clone()), (), (b = b.weak()) {
+            b.upgrade()?.ref_modify_classes(&[("gd_button_disabled", edge.get().is_none())]);
         }));
     }
     let focus_buttons = vec![
@@ -61,6 +68,10 @@ pub fn build_toolbar(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
             b.upgrade()?.ref_modify_classes(&[("gd_button_disabled", start.get().is_none() && end.get().is_none())]);
         }));
     }
+    let zoom = el("span").classes(&["gd_zoom"]).attr("title", "Zoom");
+    zoom.ref_own(|z| link!((_pc = pc), (zoom = state.zoom.clone()), (), (z = z.weak()) {
+        z.upgrade()?.ref_text(&format!("{}%", (zoom.get() * 100.).round()));
+    }));
     let status = el("span").classes(&["gd_status"]);
     status.ref_own(|status| link!((_pc = pc), (text = state.status.clone()), (), (status = status.weak()) {
         status.upgrade()?.ref_text(&text.get());
@@ -69,11 +80,14 @@ pub fn build_toolbar(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
     items.push(icon_button(state, "zoom_in", "Zoom in (+)", |s, pc| s.cmd_zoom(pc, 1.2, None)));
     items.push(icon_button(state, "zoom_out", "Zoom out (-)", |s, pc| s.cmd_zoom(pc, 1. / 1.2, None)));
     items.push(icon_button(state, "fit_screen", "Fit to view (0)", |s, pc| s.cmd_fit(pc)));
+    items.push(icon_button(state, "rotate_right", "Rotate layout direction", |s, pc| s.cmd_rotate_flow(pc)));
+    items.push(zoom);
     items.push(separator());
-    items.push(icon_button(state, "add", "New node linked from the selection (n)", |s, pc| s.cmd_new_next(pc)));
+    items.push(icon_button(state, "add", "New unlinked node (N)", |s, pc| s.cmd_new_island(pc)));
     items.extend(focus_buttons);
     items.push(separator());
     items.extend(pair_buttons);
+    items.extend(edge_buttons);
     items.push(separator());
     items.push(icon_button(state, "search", "Search (/)", |s, pc| s.cmd_search(pc, SearchTarget::Start)));
     items.push(icon_button(state, "view_sidebar", "Toggle side panel (Tab)", |s, pc| s.cmd_toggle_panel(pc)));

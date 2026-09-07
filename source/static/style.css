@@ -19,7 +19,6 @@
     --gd-container-bg: rgba(120, 130, 150, 0.08);
     --gd-edge: #6b7280;
     --gd-edge-reversed: #b45309;
-    --gd-between: #7c3aed;
     --gd-sel-color: #000000;
     --gd-accent: #2563eb;
     --gd-accent-bg: #e0f2fe;
@@ -58,7 +57,8 @@
 
     /* Edges */
     --gd-edge-width: 1.5px;
-    --gd-edge-width-between: 2.5px;
+    --gd-edge-width-selected: 2.5px;
+    --gd-edge-hit-width: 12px;
 
     /* Chrome */
     --gd-toolbar-pad: 4px 8px;
@@ -82,6 +82,11 @@
     --gd-dot-size: 1px;
     --gd-label-pad: 1px 4px;
     --gd-label-radius: 3px;
+
+    /* Overlay buttons (next to the focused node; constant on-screen size) */
+    --gd-overlay-size: 26px;
+    --gd-overlay-gap: 6px;
+    --gd-overlay-icon-size: 18px;
 }
 
 html, body {
@@ -141,6 +146,14 @@ html, body {
 
 .gd_toolbar_spacer {
     flex: 1 1 auto;
+}
+
+.gd_zoom {
+    color: var(--gd-muted);
+    font-size: var(--gd-font-size-small);
+    padding: 0 var(--gd-gap);
+    min-width: 3.5em;
+    text-align: center;
 }
 
 .gd_status {
@@ -268,9 +281,92 @@ html, body {
     font-weight: 600;
 }
 
+/* A container's interior is drawn over the links inside it, so it's made
+ * see-through to the pointer; only the title strip hovers/clicks the
+ * container. */
+.gd_node_container, .gd_node_container > .gd_node {
+    pointer-events: none;
+}
+
+.gd_node_container > .gd_node > .gd_node_text {
+    pointer-events: auto;
+    cursor: pointer;
+}
+
 .gd_node_ghost > .gd_node {
     border-style: dashed;
     opacity: var(--gd-ghost-opacity);
+}
+
+/* Overlay buttons
+ *
+ * `.gd_overlay` lives in the world so the buttons are anchored in world
+ * coordinates (the widget sets left/top). Each button is scaled by 1/zoom so
+ * it keeps its on-screen size, and offset from its anchor by `data-side`. */
+
+.gd_overlay {
+    position: absolute;
+    left: 0;
+    top: 0;
+    z-index: 100000;
+}
+
+.gd_overlay_hidden {
+    display: none;
+}
+
+.gd_overlay_button {
+    position: absolute;
+    transform-origin: 0 0;
+    width: var(--gd-overlay-size);
+    height: var(--gd-overlay-size);
+    border-radius: 50%;
+    border: 1px solid var(--gd-border);
+    background: var(--gd-panel-bg);
+    color: var(--gd-muted);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+.gd_overlay_button:hover {
+    color: var(--gd-accent);
+    border-color: var(--gd-accent);
+    background: var(--gd-panel-bg);
+}
+
+.gd_overlay_button > .gd_icon {
+    font-size: var(--gd-overlay-icon-size);
+}
+
+.gd_overlay_button[data-side="right"] {
+    transform:
+        translate(
+            calc(var(--gd-overlay-gap) / var(--gd-zoom, 1)),
+            calc(-0.5 * var(--gd-overlay-size) / var(--gd-zoom, 1)))
+        scale(calc(1 / var(--gd-zoom, 1)));
+}
+
+.gd_overlay_button[data-side="left"] {
+    transform:
+        translate(
+            calc(-1 * (var(--gd-overlay-gap) + var(--gd-overlay-size)) / var(--gd-zoom, 1)),
+            calc(-0.5 * var(--gd-overlay-size) / var(--gd-zoom, 1)))
+        scale(calc(1 / var(--gd-zoom, 1)));
+}
+
+.gd_overlay_button[data-side="bottom"] {
+    transform:
+        translate(
+            calc(-0.5 * var(--gd-overlay-size) / var(--gd-zoom, 1)),
+            calc(var(--gd-overlay-gap) / var(--gd-zoom, 1)))
+        scale(calc(1 / var(--gd-zoom, 1)));
+}
+
+.gd_overlay_button[data-side="top"] {
+    transform:
+        translate(
+            calc(-0.5 * var(--gd-overlay-size) / var(--gd-zoom, 1)),
+            calc(-1 * (var(--gd-overlay-gap) + var(--gd-overlay-size)) / var(--gd-zoom, 1)))
+        scale(calc(1 / var(--gd-zoom, 1)));
 }
 
 /* Edges */
@@ -282,14 +378,18 @@ html, body {
     marker-end: url(#gd_arrow);
 }
 
-.gd_edge_reversed {
-    stroke: var(--gd-edge-reversed);
+/* Invisible wide copy of each link for clicking */
+.gd_edge_hit {
+    fill: none;
+    stroke: transparent;
+    /* Constant on-screen width: the world is scaled by --gd-zoom */
+    stroke-width: calc(var(--gd-edge-hit-width) / var(--gd-zoom, 1));
+    pointer-events: stroke;
+    cursor: pointer;
 }
 
-.gd_edge_between {
-    stroke: var(--gd-between);
-    stroke-width: var(--gd-edge-width-between);
-    marker-end: url(#gd_arrow_sel);
+.gd_edge_reversed {
+    stroke: var(--gd-edge-reversed);
 }
 
 .gd_arrowhead {
@@ -297,7 +397,7 @@ html, body {
 }
 
 .gd_arrowhead_sel {
-    fill: var(--gd-between);
+    fill: var(--gd-sel-color);
 }
 
 .gd_edge_label {
@@ -330,6 +430,13 @@ html, body {
 .gd_edge[data-layer-color="5"] { stroke: var(--gd-layer-5); }
 .gd_edge[data-layer-color="6"] { stroke: var(--gd-layer-6); }
 .gd_edge[data-layer-color="7"] { stroke: var(--gd-layer-7); }
+
+/* After the layer colors so the selection color wins */
+.gd_edge.gd_edge_selected {
+    stroke: var(--gd-sel-color);
+    stroke-width: var(--gd-edge-width-selected);
+    marker-end: url(#gd_arrow_sel);
+}
 .gd_layer_swatch[data-layer-color="0"] { background: var(--gd-layer-0); }
 .gd_layer_swatch[data-layer-color="1"] { background: var(--gd-layer-1); }
 .gd_layer_swatch[data-layer-color="2"] { background: var(--gd-layer-2); }

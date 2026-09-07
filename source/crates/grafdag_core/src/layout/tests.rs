@@ -62,6 +62,7 @@ fn simple_chain() {
     let doc = Document {
         layers: vec![],
         selected_layer: None,
+        flow: Default::default(),
         nodes: vec![node("a", &[], &[]), node("b", &[], &[]), node("c", &[], &[])],
         edges: vec![edge("e1", "a", "b"), edge("e2", "b", "c"), edge("e3", "a", "c")],
     };
@@ -86,6 +87,7 @@ fn islands_and_cycle() {
     let doc = Document {
         layers: vec![],
         selected_layer: None,
+        flow: Default::default(),
         nodes: vec![node("a", &[], &[]), node("b", &[], &[]), node("c", &[], &[]), node("x", &[], &[]), node("y", &[], &[])],
         edges: vec![edge("e1", "a", "b"), edge("e2", "b", "c"), edge("e3", "c", "a"), edge("e4", "x", "y")],
     };
@@ -109,6 +111,7 @@ fn nested_containers() {
             active: true,
         }],
         selected_layer: Some(LayerId("L".into())),
+        flow: Default::default(),
         nodes: vec![
             node("g", &[], &["L"]),
             node("a", &["g"], &["L"]),
@@ -164,6 +167,7 @@ fn ghosts_and_hidden_layers() {
             active: false,
         }],
         selected_layer: None,
+        flow: Default::default(),
         nodes: vec![
             node("p", &[], &[]),
             node("q", &[], &[]),
@@ -198,6 +202,7 @@ fn wide_graph_no_overlap() {
     let doc = Document {
         layers: vec![],
         selected_layer: None,
+        flow: Default::default(),
         nodes: nodes,
         edges: edges,
     };
@@ -228,6 +233,7 @@ fn wide_ranks_are_split() {
     let doc = Document {
         layers: vec![],
         selected_layer: None,
+        flow: Default::default(),
         nodes: nodes,
         edges: edges,
     };
@@ -265,6 +271,7 @@ fn narrow_ranks_not_split() {
     let doc = Document {
         layers: vec![],
         selected_layer: None,
+        flow: Default::default(),
         nodes: vec![node("a", &[], &[]), node("b", &[], &[]), node("c", &[], &[]), node("g", &[], &[]), node("d", &["g"], &[])],
         edges: vec![edge("e1", "a", "b"), edge("e2", "a", "c"), edge("e3", "b", "d")],
     };
@@ -272,4 +279,148 @@ fn narrow_ranks_not_split() {
     config.max_rank_width = Some(720.);
     let l = layout(&doc, &sizes(&doc), &config, None);
     assert_eq!(l.islands[0].ranks.len(), 3, "{:?}", l.islands[0].ranks);
+}
+
+#[test]
+fn ports_follow_drawn_order() {
+    // p -> b; b -> c1, c2 (two edges to c2). Ports on b: one on top, three on
+    // the bottom, in left-to-right drawing order.
+    let doc = Document {
+        layers: vec![],
+        selected_layer: None,
+        flow: Default::default(),
+        nodes: vec![node("p", &[], &[]), node("b", &[], &[]), node("c1", &[], &[]), node("c2", &[], &[])],
+        edges: vec![edge("in", "p", "b"), edge("x", "b", "c1"), edge("y1", "b", "c2"), edge("y2", "b", "c2")],
+    };
+    let l = layout(&doc, &sizes(&doc), &LayoutConfig::default(), None);
+    let b = l.primary(&NodeId("b".into())).unwrap().clone();
+    let port = |e: &str| l.port(&EdgeId(e.into()), &b.id).unwrap();
+    assert_eq!(port("in").side, Side::Before);
+    for e in ["x", "y1", "y2"] {
+        let p = port(e);
+        assert_eq!(p.side, Side::After);
+        assert!(p.along >= b.rect.x && p.along <= b.rect.right());
+    }
+    // Bottom ports are distinct and ordered by the other end's position; the
+    // two edges to the same node are adjacent, ordered by id.
+    let c1 = l.primary(&NodeId("c1".into())).unwrap().rect.x;
+    let c2 = l.primary(&NodeId("c2".into())).unwrap().rect.x;
+    let (x, y1, y2) = (port("x").along, port("y1").along, port("y2").along);
+    assert!(y1 < y2);
+    if c1 < c2 {
+        assert!(x < y1);
+    } else {
+        assert!(y2 < x);
+    }
+    // Unknown placement or edge
+    assert!(l.port(&EdgeId("nope".into()), &b.id).is_none());
+}
+
+/// The same document laid out in every flow: successors lie in the flow
+/// direction, ports sit on the right screen sides, containers keep their
+/// title at the top, and the frame conversions round-trip.
+#[test]
+fn all_flows() {
+    let doc = Document {
+        layers: vec![],
+        selected_layer: None,
+        flow: Default::default(),
+        nodes: vec![
+            node("a", &[], &[]),
+            node("b", &[], &[]),
+            node("c", &[], &[]),
+            node("g", &[], &[]),
+            node("d", &["g"], &[]),
+            node("e", &["g"], &[]),
+            node("f", &[], &[]),
+        ],
+        edges: vec![edge("e1", "a", "b"), edge("e2", "a", "c"), edge("e3", "b", "d"), edge("e4", "d", "e"), edge("e5", "d", "g"), edge("e6", "e", "f")],
+    };
+    let mut previous: Option<Layout> = None;
+    for flow in Flow::ALL {
+        let mut config = LayoutConfig::default();
+        config.flow = flow;
+        let l = layout(&doc, &sizes(&doc), &config, previous.as_ref());
+        assert_eq!(l.flow, flow);
+        check_no_sibling_overlap(&l);
+        check_orthogonal(&l);
+        let get = |id: &str| l.primary(&NodeId(id.into())).unwrap().clone();
+        // Everything is inside the layout box
+        assert!(l.width > 0. && l.height > 0.);
+        for n in &l.nodes {
+            assert!(n.rect.x >= -0.01 && n.rect.y >= -0.01 && n.rect.right() <= l.width + 0.01 && n.rect.bottom() <= l.height + 0.01, "{:?} {:?} outside {}x{}", flow, n, l.width, l.height);
+        }
+        // Successors lie in the flow direction, and a's two successors are
+        // spread along the side axis
+        let (a, b, c) = (get("a"), get("b"), get("c"));
+        let after = |p: &Rect, q: &Rect| match flow {
+            Flow::Down => q.y >= p.bottom(),
+            Flow::Up => q.bottom() <= p.y,
+            Flow::Right => q.x >= p.right(),
+            Flow::Left => q.right() <= p.x,
+        };
+        assert!(after(&a.rect, &b.rect), "{:?}: {:?} -> {:?}", flow, a.rect, b.rect);
+        assert!(after(&a.rect, &c.rect), "{:?}: {:?} -> {:?}", flow, a.rect, c.rect);
+        if flow.horizontal() {
+            assert!((b.rect.cy() - c.rect.cy()).abs() > 10.);
+        } else {
+            assert!((b.rect.cx() - c.rect.cx()).abs() > 10.);
+        }
+        // Ports: the edge leaves a on its After side and arrives on b's Before
+        // side, and those are the expected screen sides
+        let e1 = l.edges.iter().find(|e| e.id.0 == "e1").unwrap();
+        let first = e1.points[0];
+        let last = *e1.points.last().unwrap();
+        let on_side = |p: Pt, r: &Rect, side: ScreenDir| match side {
+            ScreenDir::Up => (p.y - r.y).abs() < 0.01 && p.x >= r.x && p.x <= r.right(),
+            ScreenDir::Down => (p.y - r.bottom()).abs() < 0.01 && p.x >= r.x && p.x <= r.right(),
+            ScreenDir::Left => (p.x - r.x).abs() < 0.01 && p.y >= r.y && p.y <= r.bottom(),
+            ScreenDir::Right => (p.x - r.right()).abs() < 0.01 && p.y >= r.y && p.y <= r.bottom(),
+        };
+        assert!(on_side(first, &a.rect, flow.screen_side(Side::After)), "{:?}: {:?} not on {:?}", flow, first, a.rect);
+        assert!(on_side(last, &b.rect, flow.screen_side(Side::Before)), "{:?}: {:?} not on {:?}", flow, last, b.rect);
+        assert_eq!(l.port(&e1.id, &a.id).unwrap().side, Side::After);
+        assert_eq!(l.port(&e1.id, &b.id).unwrap().side, Side::Before);
+        // a's two edges are ordered along the side axis by their port
+        let pb = l.port(&e1.id, &a.id).unwrap().along;
+        let pc = l.port(&EdgeId("e2".into()), &a.id).unwrap().along;
+        let cb = l.canonical(pt(b.rect.cx(), b.rect.cy())).x;
+        let cc = l.canonical(pt(c.rect.cx(), c.rect.cy())).x;
+        assert_eq!(pb < pc, cb < cc, "{:?}", flow);
+        // Container: children inside, below the title strip (at the top on
+        // screen), and the title strip spans the box width
+        let g = get("g");
+        assert!(g.container);
+        for child in ["d", "e"] {
+            let r = get(child).rect;
+            assert!(r.y >= g.rect.y + g.title_height - 0.01, "{:?}: {} {:?} above title of {:?}", flow, child, r, g.rect);
+            assert!(r.x >= g.rect.x && r.right() <= g.rect.right() && r.bottom() <= g.rect.bottom(), "{:?}: {} {:?} outside {:?}", flow, child, r, g.rect);
+        }
+        let (d, e) = (get("d"), get("e"));
+        assert!(after(&d.rect, &e.rect), "{:?}: {:?} -> {:?}", flow, d.rect, e.rect);
+        // The edge from d to its own container ends at the title strip
+        let e5 = l.edges.iter().find(|e| e.id.0 == "e5").unwrap();
+        let end = *e5.points.last().unwrap();
+        assert!((end.y - (g.rect.y + g.title_height)).abs() < 0.01, "{:?}: {:?} vs title bottom {}", flow, end, g.rect.y + g.title_height);
+        assert!(end.x >= g.rect.x && end.x <= g.rect.right());
+        // Frame conversions round-trip
+        for n in &l.nodes {
+            let p = pt(n.rect.cx(), n.rect.cy());
+            let back = flow.to_screen(l.extent(), l.canonical(p));
+            assert!((back.x - p.x).abs() < 0.01 && (back.y - p.y).abs() < 0.01);
+        }
+        previous = Some(l);
+    }
+    // Directions
+    for flow in Flow::ALL {
+        for m in [Motion::Forward, Motion::Backward, Motion::SideNext, Motion::SidePrev] {
+            assert_eq!(flow.motion(flow.screen_dir(m)), m);
+        }
+        let f = flow.screen_dir(Motion::Forward);
+        let n = flow.screen_dir(Motion::SideNext);
+        let vertical = |d: ScreenDir| matches!(d, ScreenDir::Up | ScreenDir::Down);
+        assert_ne!(vertical(f), vertical(n), "{:?}: axes must be perpendicular", flow);
+    }
+    assert_eq!(Flow::Down.next(), Flow::Right);
+    assert_eq!(Flow::Left.next(), Flow::Down);
 }
