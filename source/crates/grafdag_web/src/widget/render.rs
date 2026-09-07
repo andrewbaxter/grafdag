@@ -356,9 +356,6 @@ fn make_node_el(state: &Weak<State>, id: &PlacementId) -> El {
                 return;
             };
             let button = ev.button();
-            if button == 1 {
-                return;
-            }
             ev.stop_propagation();
             ev.prevent_default();
             state.eg.event(|pc| {
@@ -649,12 +646,6 @@ fn apply_layout(pc: &mut ProcessingContext, state: &Rc<State>, layout: &Layout, 
                     let Some(state) = state.upgrade() else {
                         return;
                     };
-                    let Some(mev) = ev.dyn_ref::<web_sys::MouseEvent>() else {
-                        return;
-                    };
-                    if mev.button() == 1 {
-                        return;
-                    }
                     ev.stop_propagation();
                     ev.prevent_default();
                     state.eg.event(|pc| {

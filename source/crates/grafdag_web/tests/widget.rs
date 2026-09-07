@@ -279,6 +279,41 @@ fn mouse_selection_and_zoom() {
     assert!(h.widget.state().zoom.get() > z0);
 }
 
+fn mouse_at(target: &web_sys::EventTarget, kind: &str, button: i16, x: f64, y: f64) {
+    let init = MouseEventInit::new();
+    init.set_button(button);
+    init.set_client_x(x as i32);
+    init.set_client_y(y as i32);
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    let ev = MouseEvent::new_with_mouse_event_init_dict(kind, &init).unwrap();
+    target.dispatch_event(&ev).unwrap();
+}
+
+#[wasm_bindgen_test]
+fn left_drag_pans_click_clears() {
+    let h = setup(sample_doc());
+    mouse(&node_el("a"), 0);
+    mouse(&node_el("c"), 2);
+    assert_eq!(sel(&h), (Some("a".into()), Some("c".into())));
+    let canvas = document().query_selector(".gd_canvas").unwrap().unwrap();
+    let win: web_sys::EventTarget = gloo_utils::window().into();
+    // Left drag on empty space pans and keeps the selection
+    let (px, py) = h.widget.state().pan.get();
+    mouse_at(&canvas, "mousedown", 0, 10., 10.);
+    mouse_at(&win, "mousemove", 0, 50., 40.);
+    mouse_at(&win, "mouseup", 0, 50., 40.);
+    assert_eq!(h.widget.state().pan.get(), (px + 40., py + 30.));
+    assert_eq!(sel(&h), (Some("a".into()), Some("c".into())));
+    // Left click without dragging clears the selection
+    let (px, py) = h.widget.state().pan.get();
+    mouse_at(&canvas, "mousedown", 0, 10., 10.);
+    mouse_at(&win, "mousemove", 0, 11., 11.);
+    mouse_at(&win, "mouseup", 0, 11., 11.);
+    assert_eq!(h.widget.state().pan.get(), (px, py));
+    assert_eq!(sel(&h), (None, None));
+}
+
 #[wasm_bindgen_test]
 fn link_unlink_reverse_delete_undo() {
     let h = setup(sample_doc());

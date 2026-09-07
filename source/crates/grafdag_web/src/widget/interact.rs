@@ -30,6 +30,10 @@ use {
     },
 };
 
+/// Pixels the mouse must move before a left press on the canvas becomes a pan
+/// rather than a click.
+const DRAG_THRESHOLD: f64 = 3.;
+
 fn is_text_input(ev: &web_sys::Event) -> bool {
     let Some(target) = ev.target() else {
         return false;
@@ -122,12 +126,13 @@ pub fn attach(root: &El, state: &Rc<State>) {
     });
 }
 
-/// Attach mouse handling to the canvas: middle drag pans, wheel zooms, clicks
-/// on empty space clear the selection.
+/// Attach mouse handling to the canvas: left drag on empty space pans, wheel
+/// zooms, left/right clicks (without dragging) on empty space clear the
+/// selection.
 pub fn attach_canvas(canvas: &El, state: &Rc<State>) {
     let weak: Weak<State> = Rc::downgrade(state);
-    // Pan drag state: (start mouse x, y, start pan x, y)
-    let drag: Rc<Cell<Option<(f64, f64, f64, f64)>>> = Rc::new(Cell::new(None));
+    // Pan drag state: (start mouse x, y, start pan x, y, moved past threshold)
+    let drag: Rc<Cell<Option<(f64, f64, f64, f64, bool)>>> = Rc::new(Cell::new(None));
     canvas.ref_on_with_options("mousedown", EventListenerOptions::enable_prevent_default(), {
         let weak = weak.clone();
         let drag = drag.clone();
@@ -139,16 +144,10 @@ pub fn attach_canvas(canvas: &El, state: &Rc<State>) {
                 return;
             };
             match ev.button() {
-                1 => {
-                    let (px, py) = state.pan.get();
-                    drag.set(Some((ev.client_x() as f64, ev.client_y() as f64, px, py)));
-                    ev.prevent_default();
-                },
                 0 => {
-                    state.eg.event(|pc| {
-                        state.set_start(pc, None);
-                        state.set_end(pc, None);
-                    });
+                    let (px, py) = state.pan.get();
+                    drag.set(Some((ev.client_x() as f64, ev.client_y() as f64, px, py, false)));
+                    ev.prevent_default();
                 },
                 2 => {
                     state.eg.event(|pc| {
@@ -176,20 +175,43 @@ pub fn attach_canvas(canvas: &El, state: &Rc<State>) {
                 let Some(ev) = ev.dyn_ref::<MouseEvent>() else {
                     return;
                 };
-                let (mx, my, px, py) = d;
-                let nx = px + ev.client_x() as f64 - mx;
-                let ny = py + ev.client_y() as f64 - my;
+                let (mx, my, px, py, moved) = d;
+                let dx = ev.client_x() as f64 - mx;
+                let dy = ev.client_y() as f64 - my;
+                // Small jitter during a click shouldn't turn it into a drag
+                let moved = moved || dx.abs() > DRAG_THRESHOLD || dy.abs() > DRAG_THRESHOLD;
+                if !moved {
+                    return;
+                }
+                drag.set(Some((mx, my, px, py, true)));
                 state.eg.event(|pc| {
-                    state.pan.set(pc, (nx, ny));
+                    state.pan.set(pc, (px + dx, py + dy));
                 });
             })
         }
     });
     canvas.ref_own({
+        let weak = weak.clone();
         let drag = drag.clone();
         move |_| {
-            EventListener::new(&window(), "mouseup", move |_| {
-                drag.set(None);
+            EventListener::new(&window(), "mouseup", move |ev| {
+                let Some(d) = drag.take() else {
+                    return;
+                };
+                let Some(ev) = ev.dyn_ref::<MouseEvent>() else {
+                    return;
+                };
+                if ev.button() != 0 || d.4 {
+                    return;
+                }
+                // Left click without dragging on empty space clears the selection
+                let Some(state) = weak.upgrade() else {
+                    return;
+                };
+                state.eg.event(|pc| {
+                    state.set_start(pc, None);
+                    state.set_end(pc, None);
+                });
             })
         }
     });
