@@ -22,6 +22,7 @@ use {
         },
         Action,
         Edge,
+        EdgeId,
         Node,
         NodeId,
     },
@@ -29,6 +30,7 @@ use {
         HistPrimEaseExt,
         ProcessingContext,
     },
+    std::collections::HashSet,
 };
 
 /// Direction along the side axis.
@@ -92,6 +94,81 @@ impl State {
         let mut out: Vec<NodeId> = doc.edges.iter().filter(|e| &e.dest == id && doc.edge_visible(e)).map(|e| e.source.clone()).collect();
         self.sort_by_x(&mut out);
         return out;
+    }
+
+    /// Every visible link on a walk from one node to the other, following
+    /// links in the direction that leads there (either node may be the
+    /// upstream one), and the nodes those walks pass through. Empty if neither
+    /// node reaches the other.
+    pub fn connecting(&self, start: &NodeId, end: &NodeId) -> (Vec<EdgeId>, Vec<NodeId>) {
+        let doc = self.doc.borrow();
+        let edges: Vec<&Edge> = doc.edges.iter().filter(|e| doc.edge_visible(e)).collect();
+        // Nodes reachable from `from` (itself included), walking links forwards
+        // or backwards.
+        let reach = |from: &NodeId, forward: bool| -> HashSet<NodeId> {
+            let mut seen = HashSet::new();
+            seen.insert(from.clone());
+            let mut queue = vec![from.clone()];
+            while let Some(here) = queue.pop() {
+                for e in &edges {
+                    let (near, far) = if forward {
+                        (&e.source, &e.dest)
+                    } else {
+                        (&e.dest, &e.source)
+                    };
+                    if near == &here && seen.insert(far.clone()) {
+                        queue.push(far.clone());
+                    }
+                }
+            }
+            return seen;
+        };
+        let mut out = vec![];
+        let mut nodes: Vec<NodeId> = vec![];
+        for (upstream, downstream) in [(start, end), (end, start)] {
+            let after = reach(upstream, true);
+            if !after.contains(downstream) {
+                continue;
+            }
+            // A link is on a walk between them if the upstream node reaches its
+            // source and its dest reaches the downstream node.
+            let before = reach(downstream, false);
+            for e in &edges {
+                if after.contains(&e.source) && before.contains(&e.dest) && !out.contains(&e.id) {
+                    out.push(e.id.clone());
+                    for n in [&e.source, &e.dest] {
+                        if !nodes.contains(n) {
+                            nodes.push(n.clone());
+                        }
+                    }
+                }
+            }
+        }
+        return (out, nodes);
+    }
+
+    /// Just the links of `connecting`.
+    pub fn connecting_edges(&self, start: &NodeId, end: &NodeId) -> Vec<EdgeId> {
+        return self.connecting(start, end).0;
+    }
+
+    /// The link a two-node selection follows out of the anchor: a direct link
+    /// if there is one, else the first link of a walk between them.
+    pub fn connecting_edge_from(&self, start: &NodeId, end: &NodeId) -> Option<EdgeId> {
+        let direct = {
+            let doc = self.doc.borrow();
+            let direct = doc.edges_between(start, end).next().map(|e| e.id.clone());
+            direct
+        };
+        if direct.is_some() {
+            return direct;
+        }
+        return self.connecting_edges(start, end).into_iter().find(|e| self.edge_touches(e, start));
+    }
+
+    /// Whether a link has `node` as one of its ends.
+    pub fn edge_touches(&self, edge: &EdgeId, node: &NodeId) -> bool {
+        return self.doc.borrow().edge(edge).map(|e| &e.source == node || &e.dest == node).unwrap_or(false);
     }
 
     /// Visible successors (`forward`) or predecessors of a node.
@@ -281,8 +358,35 @@ impl State {
         self.cycle_relative(pc, false);
     }
 
+    /// Pull the primary node back to the far end of the selected link, so a
+    /// selection spanning a walk becomes a single hop before it moves.
+    fn collapse_to_hop(&self, pc: &mut ProcessingContext) {
+        let (Some(start), Some(edge)) = (self.sel_start.get(), self.sel_edge.get()) else {
+            return;
+        };
+        let other = {
+            let doc = self.doc.borrow();
+            let Some(e) = doc.edge(&edge) else {
+                return;
+            };
+            if e.source == start {
+                e.dest.clone()
+            } else if e.dest == start {
+                e.source.clone()
+            } else {
+                return;
+            }
+        };
+        if self.sel_end.get().as_ref() == Some(&other) {
+            return;
+        }
+        self.set_selection(pc, Some(start), Some(other));
+        self.sel_edge.set(pc, Some(edge));
+    }
+
     pub fn cmd_flip(&self, pc: &mut ProcessingContext) {
         self.follow.set(true);
+        self.collapse_to_hop(pc);
         let (Some(s), Some(e)) = (self.sel_start.get(), self.sel_end.get()) else {
             return;
         };

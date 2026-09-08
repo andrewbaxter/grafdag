@@ -16,7 +16,7 @@
       "active": false
     }
   ],
-  "selected_layer": "k8s",
+  "selected_layer": "infra",
   "nodes": [
     {
       "id": "client",

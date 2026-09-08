@@ -1067,3 +1067,41 @@ async fn keyboard_follow_eases() {
     let (cx, cy) = center();
     assert!((cx - vw / 2.).abs() < 1. && (cy - vh / 2.).abs() < 1., "{} {} vs {} {}", cx, cy, vw, vh);
 }
+
+#[wasm_bindgen_test]
+fn walk_selection_highlight() {
+    let h = setup(sample_doc());
+    let s = h.widget.state();
+    let edge_active =
+        |id: &str| document().query_selector(&format!(".gd_edge.gd_active[data-edge=\"{}\"]", id)).unwrap().is_some();
+    // A lone node unfades its immediate links
+    mouse(&node_el("a"), 0);
+    assert!(edge_active("e1") && edge_active("e2"));
+    assert!(!edge_active("e3"));
+    // A pair unfades the links of the walk between them (a -> b -> d), not the
+    // other links of either node
+    s.eg.event(|pc| s.set_selection(pc, Some(NodeId("a".into())), Some(NodeId("d".into()))));
+    assert!(edge_active("e1") && edge_active("e3"));
+    assert!(!edge_active("e2"));
+    assert!(node_el("a").class_list().contains("gd_active"));
+    assert!(node_el("d").class_list().contains("gd_active"));
+    // Including the nodes the walk passes through
+    assert!(node_el("b").class_list().contains("gd_active"));
+    assert!(!node_el("c").class_list().contains("gd_active"));
+    // The selected link is the walk's first link out of the anchor
+    assert_eq!(s.sel_edge.get(), Some(EdgeId("e1".into())));
+    // Cycling links across the flow moves to a node one hop from the anchor
+    key("ArrowRight", false);
+    assert_eq!(sel(&h), (Some("a".into()), Some("c".into())));
+    assert_eq!(s.sel_edge.get(), Some(EdgeId("e2".into())));
+    assert!(edge_active("e2") && !edge_active("e1") && !edge_active("e3"));
+    // Flipping a walk also collapses it to a single hop first
+    s.eg.event(|pc| s.set_selection(pc, Some(NodeId("a".into())), Some(NodeId("d".into()))));
+    key("ArrowUp", false);
+    assert_eq!(sel(&h), (Some("b".into()), Some("a".into())));
+    assert_eq!(s.sel_edge.get(), Some(EdgeId("e1".into())));
+    // Unconnected nodes highlight no links at all
+    s.eg.event(|pc| s.set_selection(pc, Some(NodeId("c".into())), Some(NodeId("b".into()))));
+    assert_eq!(s.sel_edge.get(), None);
+    assert!(!edge_active("e1") && !edge_active("e2") && !edge_active("e3"));
+}

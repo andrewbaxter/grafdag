@@ -376,26 +376,28 @@ impl State {
         }
     }
 
-    /// Keep the selected link consistent with the selected nodes: keep it if it
-    /// still joins them, else pick the first link between them.
+    /// Keep the selected link consistent with the selected nodes: keep it if
+    /// it's still the anchor's link along a walk to the primary node, else
+    /// pick that walk's first link out of the anchor.
     pub fn sync_edge(&self, pc: &mut ProcessingContext) {
-        let doc = self.doc.borrow();
         let pair = match (self.sel_start.get(), self.sel_end.get()) {
             (Some(s), Some(e)) => Some((s, e)),
             _ => None,
         };
         let Some((s, e)) = pair else {
             self.sel_edge.set(pc, None);
-            drop(doc);
             self.close_stale_editor(pc);
             return;
         };
-        let keep = self.sel_edge.get().map(|cur| doc.edges_between(&s, &e).any(|x| x.id == cur)).unwrap_or(false);
+        let keep =
+            self
+                .sel_edge
+                .get()
+                .map(|cur| self.edge_touches(&cur, &s) && self.connecting_edges(&s, &e).contains(&cur))
+                .unwrap_or(false);
         if !keep {
-            let first = doc.edges_between(&s, &e).next().map(|x| x.id.clone());
-            self.sel_edge.set(pc, first);
+            self.sel_edge.set(pc, self.connecting_edge_from(&s, &e));
         }
-        drop(doc);
         self.close_stale_editor(pc);
     }
 

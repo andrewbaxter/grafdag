@@ -748,14 +748,26 @@ fn apply_selection(pc: &mut ProcessingContext, state: &Rc<State>, animate: bool)
     let hover = state.hover.get();
     let hover_edge = state.hover_edge.get();
     let peek = state.peek.get();
-    // Nodes whose incident edges are also active: the primary selected node, a
+    // With a pair selected the highlight follows the walk between the two
+    // nodes instead of spreading from either of them, so it never reaches past
+    // the selection.
+    let (connecting, walk_nodes): (Vec<EdgeId>, Vec<NodeId>) = match (&start, &end) {
+        (Some(s), Some(e)) => state.connecting(s, e),
+        _ => (vec![], vec![]),
+    };
+    // Nodes whose incident edges are also active: a lone selected node, a
     // hovered node and a previewed search result.
-    let spreading: Vec<NodeId> = end.iter().chain(hover.iter()).chain(peek.iter()).cloned().collect();
+    let mut spreading: Vec<NodeId> = hover.iter().chain(peek.iter()).cloned().collect();
+    if start.is_none() {
+        spreading.extend(end.iter().cloned());
+    }
     // All active nodes: the spreading set plus every selected node and the ends
     // of a hovered edge. Those are unfaded themselves, but their other edges are
     // not (highlighting only ever reaches immediate neighbors).
     let mut active = spreading.clone();
     active.extend(start.iter().chain(end.iter()).cloned());
+    // The nodes a two-node selection's walk passes through are unfaded too.
+    active.extend(walk_nodes);
     if let Some(h) = &hover_edge {
         for (key, v) in render.edges.iter() {
             if &key.0 == h {
@@ -797,7 +809,8 @@ fn apply_selection(pc: &mut ProcessingContext, state: &Rc<State>, animate: bool)
     for (key, v) in render.edges.iter_mut() {
         let selected = sel_edge.as_ref() == Some(&key.0);
         let is_active =
-            spreading.contains(&v.source) || spreading.contains(&v.dest) || hover_edge.as_ref() == Some(&key.0);
+            spreading.contains(&v.source) || spreading.contains(&v.dest) || connecting.contains(&key.0) ||
+                hover_edge.as_ref() == Some(&key.0);
         v.el.ref_modify_classes(&[("gd_edge_selected", selected), ("gd_active", is_active)]);
         let path = v.el.clone();
         let label = v.label.clone();
