@@ -363,26 +363,9 @@ fn make_node_el(state: &Weak<State>, id: &PlacementId) -> El {
             state.eg.event(|pc| {
                 state.activate_node_layer(pc, &id);
                 if button == 0 {
-                    if state.sel_start.get().as_ref() == Some(&id) {
-                        state.set_start(pc, None);
-                    } else {
-                        state.set_start(pc, Some(id.clone()));
-                        if state.sel_end.get().as_ref() == Some(&id) {
-                            state.set_end(pc, None);
-                        }
-                    }
+                    state.click_select(pc, &id);
                 } else if button == 2 {
-                    if state.sel_end.get().as_ref() == Some(&id) {
-                        state.set_end(pc, None);
-                    } else if state.sel_start.get().is_none() {
-                        state.set_start(pc, Some(id.clone()));
-                    } else if state.sel_start.get().as_ref() == Some(&id) {
-                        // Right clicking the start node moves it to the end
-                        state.set_start(pc, None);
-                        state.set_end(pc, Some(id.clone()));
-                    } else {
-                        state.set_end(pc, Some(id.clone()));
-                    }
+                    state.click_extend(pc, &id);
                 }
             });
         }
@@ -640,7 +623,7 @@ fn apply_layout(pc: &mut ProcessingContext, state: &Rc<State>, layout: &Layout, 
             p.ref_attr("data-edge", &e.id.0);
             let hit = svg_el("path").classes(&["gd_edge_hit"]);
             hit.ref_attr("data-edge", &e.id.0);
-            // Clicking a link selects its ends (start = source, end = dest)
+            // Clicking a link selects its ends (anchor = source, primary = dest)
             hit.ref_on_with_options("mousedown", EventListenerOptions::enable_prevent_default(), {
                 let state = Rc::downgrade(state);
                 let id = e.id.clone();
@@ -765,11 +748,9 @@ fn apply_selection(pc: &mut ProcessingContext, state: &Rc<State>, animate: bool)
     let hover = state.hover.get();
     let hover_edge = state.hover_edge.get();
     let peek = state.peek.get();
-    // Nodes whose incident edges are also active: the focused end of the
-    // selection (the end node if there is one, else the start node), a
+    // Nodes whose incident edges are also active: the primary selected node, a
     // hovered node and a previewed search result.
-    let spreading: Vec<NodeId> =
-        end.as_ref().or(start.as_ref()).into_iter().chain(hover.iter()).chain(peek.iter()).cloned().collect();
+    let spreading: Vec<NodeId> = end.iter().chain(hover.iter()).chain(peek.iter()).cloned().collect();
     // All active nodes: the spreading set plus every selected node and the ends
     // of a hovered edge. Those are unfaded themselves, but their other edges are
     // not (highlighting only ever reaches immediate neighbors).
@@ -807,7 +788,7 @@ fn apply_selection(pc: &mut ProcessingContext, state: &Rc<State>, animate: bool)
         set_animated(pc, state, &v.opacity, target(is_active, v.secondary), animate && !v.fresh, |o| write_opacity(&e, *o));
         v.fresh = false;
     }
-    // Overlay buttons next to the focused node
+    // Overlay buttons next to the primary node
     let focus_rect = state.focus_node().and_then(|f| {
         let p = state.layout.borrow().primary(&f)?.id.clone();
         Some(render.nodes.get(&p)?.rect.get())
@@ -878,7 +859,7 @@ pub fn place_overlay(state: &State, rect: Option<&Rect4>) {
     let flow = state.doc.borrow().flow;
     ov.sibling.ref_modify_classes(&[("gd_overlay_hidden", !state.sibling_possible())]);
     place_overlay_button(&ov.sibling, r, flow.screen_dir(Motion::SideNext));
-    let inward = state.sel_end.get().is_some() && state.inward_direction();
+    let inward = state.inward_direction();
     place_overlay_button(&ov.next, r, flow.screen_dir(if inward {
         Motion::Backward
     } else {

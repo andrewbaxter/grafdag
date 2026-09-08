@@ -181,40 +181,42 @@ fn renders_and_measures() {
 fn keyboard_navigation() {
     let h = setup(sample_doc());
     key("PageDown", false);
-    assert_eq!(sel(&h), (Some("a".into()), None));
+    assert_eq!(sel(&h), (None, Some("a".into())));
     key("ArrowDown", false);
     let (s, e) = sel(&h);
     assert_eq!(s, Some("a".into()));
     assert!(e == Some("b".into()) || e == Some("c".into()));
-    // Cycle the selected link among the start node's links; the end follows
+    // Cycle the selected link among the anchor's links; the primary follows
     key("ArrowRight", false);
     let (_, e2) = sel(&h);
     assert!(e2.is_some() && e2 != e);
     let edge = h.widget.state().sel_edge.get().expect("link selected");
     assert!(document().query_selector(&format!(".gd_edge_selected[data-edge=\"{}\"]", edge.0)).unwrap().is_some());
-    // Shift+Down cycles the end among the start's successors
+    // Shift+Down cycles the primary node among the anchor's successors
     key("ArrowDown", true);
     let (_, e3) = sel(&h);
     assert!(e3 == Some("b".into()) || e3 == Some("c".into()));
-    // Move forward: start becomes end
+    // Move forward: the node we came from trails as the anchor. From a dead
+    // end there's nothing to move onto, so the selection collapses onto it.
     key("ArrowDown", false);
     let (s4, e4) = sel(&h);
-    assert_eq!(Some(s4.clone().unwrap()), e3);
-    // Select "a" (above) as the end: the selection now points up, so Down swaps
-    if e4.is_none() {
-        mouse(&node_el("a"), 2);
-        assert_eq!(sel(&h), (s4.clone(), Some("a".into())));
-        key("ArrowDown", false);
-        assert_eq!(sel(&h), (Some("a".into()), s4.clone()));
-        // Now it points down, so Up swaps back
-        key("ArrowUp", false);
-        assert_eq!(sel(&h), (s4.clone(), Some("a".into())));
+    if s4.is_some() {
+        assert_eq!(s4, e3);
+    } else {
+        assert_eq!(e4, e3);
     }
-    // At the top level, Escape clears end, then start
+    // "b" is after "a", so the selection points down: Up swaps the two
     mouse(&node_el("a"), 0);
     mouse(&node_el("b"), 2);
     assert_eq!(sel(&h), (Some("a".into()), Some("b".into())));
+    key("ArrowUp", false);
+    assert_eq!(sel(&h), (Some("b".into()), Some("a".into())));
+    // Now it points up, so Down swaps back
+    key("ArrowDown", false);
+    assert_eq!(sel(&h), (Some("a".into()), Some("b".into())));
+    // At the top level, Escape drops the anchor, then the primary node
     key("Escape", false);
+    assert_eq!(sel(&h), (None, Some("b".into())));
     key("Escape", false);
     assert_eq!(sel(&h), (None, None));
     // Tab toggles the side panel
@@ -227,17 +229,17 @@ fn keyboard_navigation() {
 fn enter_and_exit() {
     let h = setup(sample_doc());
     mouse(&node_el("g"), 0);
-    assert_eq!(sel(&h), (Some("g".into()), None));
+    assert_eq!(sel(&h), (None, Some("g".into())));
     // Enter selects a child of the single node
     key("Enter", false);
-    assert_eq!(sel(&h), (Some("d".into()), None));
+    assert_eq!(sel(&h), (None, Some("d".into())));
     // Enter with no children does nothing
     key("Enter", false);
-    assert_eq!(sel(&h), (Some("d".into()), None));
+    assert_eq!(sel(&h), (None, Some("d".into())));
     // Escape (exit) selects the parent
     key("Escape", false);
-    assert_eq!(sel(&h), (Some("g".into()), None));
-    // With an end node, enter/exit move the end node
+    assert_eq!(sel(&h), (None, Some("g".into())));
+    // With an anchor too, enter/exit move the primary node
     mouse(&node_el("b"), 0);
     mouse(&node_el("g"), 2);
     assert_eq!(sel(&h), (Some("b".into()), Some("g".into())));
@@ -245,9 +247,9 @@ fn enter_and_exit() {
     assert_eq!(sel(&h), (Some("b".into()), Some("d".into())));
     key("Escape", false);
     assert_eq!(sel(&h), (Some("b".into()), Some("g".into())));
-    // At the top level, exit clears the end node, then the start node
+    // At the top level, exit drops the anchor, then the primary node
     key("Escape", false);
-    assert_eq!(sel(&h), (Some("b".into()), None));
+    assert_eq!(sel(&h), (None, Some("g".into())));
     key("Escape", false);
     assert_eq!(sel(&h), (None, None));
     // Closing a pane takes priority over exiting
@@ -256,16 +258,54 @@ fn enter_and_exit() {
     assert!(matches!(h.widget.state().mode.get(), Mode::EditNode(_)));
     key("Escape", false);
     assert!(matches!(h.widget.state().mode.get(), Mode::Layers));
-    assert_eq!(sel(&h), (Some("d".into()), None));
+    assert_eq!(sel(&h), (None, Some("d".into())));
     key("Escape", false);
-    assert_eq!(sel(&h), (Some("g".into()), None));
+    assert_eq!(sel(&h), (None, Some("g".into())));
+}
+
+/// The selection is either empty, one primary node, or an anchor *and* a
+/// primary node - never an anchor on its own, whatever the command.
+#[wasm_bindgen_test]
+fn selection_invariant_holds() {
+    let h = setup(sample_doc());
+    let check = |what: &str| {
+        let (s, e) = sel(&h);
+        assert!(!(s.is_some() && e.is_none()), "anchor without a primary node after {}: {:?}", what, (s, e));
+    };
+    for keys in [
+        vec!["PageDown"],
+        vec!["ArrowDown", "ArrowDown", "ArrowDown"],
+        vec!["ArrowUp", "ArrowUp"],
+        vec!["ArrowRight", "ArrowLeft"],
+        vec!["Enter", "Escape", "Escape"],
+        vec!["n", "Escape", "s", "Escape", "N", "Escape"],
+        vec!["Delete", "Delete", "z", "Z"],
+        vec!["l", "u", "r"],
+    ] {
+        for k in &keys {
+            key(k, false);
+            check(k);
+        }
+    }
+    // Mouse: every click on a node, and on empty space, from every selection
+    for (button, id) in [(0, "a"), (2, "b"), (2, "b"), (0, "a"), (0, "a"), (2, "g"), (0, "g"), (2, "g")] {
+        mouse(&node_el(id), button);
+        check(&format!("button {} on {}", button, id));
+    }
+    let canvas = document().query_selector(".gd_canvas").unwrap().unwrap();
+    mouse(&node_el("a"), 0);
+    mouse(&node_el("b"), 2);
+    mouse_at(&canvas, "mousedown", 2, 10., 10.);
+    // Right click on empty space drops the anchor
+    assert_eq!(sel(&h), (None, Some("b".into())));
+    check("right click on empty space");
 }
 
 #[wasm_bindgen_test]
 fn mouse_selection_and_zoom() {
     let h = setup(sample_doc());
     mouse(&node_el("a"), 0);
-    assert_eq!(sel(&h), (Some("a".into()), None));
+    assert_eq!(sel(&h), (None, Some("a".into())));
     // Clicking a node in another layer makes that its first layer current
     assert_eq!(h.widget.state().doc.borrow().selected_layer, None);
     mouse(&node_el("c"), 0);
@@ -276,6 +316,14 @@ fn mouse_selection_and_zoom() {
     assert_eq!(sel(&h), (Some("a".into()), Some("b".into())));
     assert!(node_el("a").class_list().contains("gd_node_start"));
     assert!(node_el("b").class_list().contains("gd_node_end"));
+    // Clicking the node again deselects it
+    mouse(&node_el("a"), 0);
+    assert_eq!(sel(&h), (None, Some("a".into())));
+    mouse(&node_el("a"), 0);
+    assert_eq!(sel(&h), (None, None));
+    mouse(&node_el("a"), 0);
+    mouse(&node_el("b"), 2);
+    assert_eq!(sel(&h), (Some("a".into()), Some("b".into())));
     assert_eq!(h.widget.state().sel_edge.get(), Some(EdgeId("e1".into())));
     assert!(document().query_selector(".gd_edge_selected[data-edge=\"e1\"]").unwrap().is_some());
     // Selected nodes and their edges are unfaded
@@ -301,9 +349,9 @@ fn mouse_selection_and_zoom() {
     assert!(node_el("c").class_list().contains("gd_active"));
     hit.dispatch_event(&MouseEvent::new_with_mouse_event_init_dict("mouseleave", &hover_init).unwrap()).unwrap();
     assert!(!node_el("c").class_list().contains("gd_active"));
-    // Toggle off
+    // Toggling the primary node off promotes the anchor
     mouse(&node_el("b"), 2);
-    assert_eq!(sel(&h), (Some("a".into()), None));
+    assert_eq!(sel(&h), (None, Some("a".into())));
     assert_eq!(h.widget.state().sel_edge.get(), None);
     // Clicking a link selects its ends by direction
     let path = document().query_selector(".gd_edge_hit[data-edge=\"e2\"]").unwrap().unwrap();
@@ -375,10 +423,10 @@ fn link_unlink_reverse_delete_undo() {
     }
     key("u", false);
     assert_eq!(h.widget.state().doc.borrow().edges.len(), 3);
-    // Delete the end node
+    // Delete the primary node; the anchor takes its place
     key("Delete", false);
     assert!(h.widget.state().doc.borrow().node(&NodeId("c".into())).is_none());
-    assert_eq!(sel(&h), (Some("b".into()), None));
+    assert_eq!(sel(&h), (None, Some("b".into())));
     assert_eq!(document().query_selector_all(".gd_node_wrap").unwrap().length(), 4);
     // Undo restores it, redo deletes again
     key("z", false);
@@ -397,7 +445,7 @@ fn create_and_edit_node() {
     key("n", false);
     let (s, e) = sel(&h);
     assert_eq!(s, Some("a".into()));
-    let new_id = e.expect("new node selected as end");
+    let new_id = e.expect("new node selected as the primary");
     assert!(matches!(h.widget.state().mode.get(), Mode::EditNode(_)));
     {
         let doc = h.widget.state().doc.borrow();
@@ -423,7 +471,7 @@ fn create_and_edit_node() {
     assert_eq!(h.widget.state().mode.get(), Mode::Layers);
     key("z", false);
     assert_eq!(h.widget.state().doc.borrow().node(&NodeId(new_id.clone())).unwrap().text, "");
-    // New sibling from start
+    // New sibling, linked from the anchor
     key("s", false);
     let (s2, e2) = sel(&h);
     assert_eq!(s2, Some("a".into()));
@@ -431,8 +479,8 @@ fn create_and_edit_node() {
     // Unlinked node (new island) from the toolbar key
     key("N", false);
     let (s3, e3) = sel(&h);
-    let island = s3.expect("island selected as start");
-    assert_eq!(e3, None);
+    assert_eq!(s3, None);
+    let island = e3.expect("island selected on its own");
     let doc = h.widget.state().doc.borrow();
     assert!(!doc.edges.iter().any(|x| x.source.0 == island || x.dest.0 == island));
 }
@@ -454,20 +502,20 @@ fn overlay_buttons() {
     let next_el = next.clone().dyn_into::<HtmlElement>().unwrap();
     let left: f64 = next_el.style().get_property_value("left").unwrap().trim_end_matches("px").parse().unwrap();
     assert!((left - (a.x + a.w / 2.)).abs() < 0.01, "{} vs {:?}", left, a);
-    // With a link selected the sibling button appears to the right of the end
+    // With a link selected the sibling button appears to the right of the primary
     mouse(&node_el("b"), 2);
     assert!(!sibling.class_list().contains("gd_overlay_hidden"));
     let b = h.widget.state().placed(&NodeId("b".into())).unwrap().rect;
     let sib_el = sibling.clone().dyn_into::<HtmlElement>().unwrap();
     let left: f64 = sib_el.style().get_property_value("left").unwrap().trim_end_matches("px").parse().unwrap();
     assert!((left - (b.x + b.w)).abs() < 0.01);
-    // Clicking the sibling button creates a node linked from the start
+    // Clicking the sibling button creates a node linked from the anchor
     let before = h.widget.state().doc.borrow().nodes.len();
     mouse(&sibling, 0);
     sibling.dispatch_event(&MouseEvent::new("click").unwrap()).unwrap();
     let (s, e) = sel(&h);
     assert_eq!(s, Some("a".into()));
-    let new_id = e.expect("new sibling selected as end");
+    let new_id = e.expect("new sibling selected as the primary");
     assert_ne!(new_id, "b");
     {
         let doc = h.widget.state().doc.borrow();
@@ -524,7 +572,7 @@ fn search() {
     kinit.set_bubbles(true);
     kinit.set_cancelable(true);
     input.dispatch_event(&KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &kinit).unwrap()).unwrap();
-    assert_eq!(sel(&h), (Some("c".into()), None));
+    assert_eq!(sel(&h), (None, Some("c".into())));
     assert_eq!(h.widget.state().mode.get(), Mode::Layers);
 }
 
@@ -603,10 +651,10 @@ fn search_preview() {
     // Accepting folds the preview into the base pan: no jump. Closing search
     // ends the preview (the view stays, so there's nothing to snap back to)
     input_key(&input, "Enter");
-    assert_eq!(sel(&h), (Some(current.0.clone()), None));
+    assert_eq!(sel(&h), (None, Some(current.0.clone())));
     assert_eq!(s.mode.get(), Mode::Layers);
     assert_eq!(s.peek.get(), None);
-    assert!(!node_el(&current.0).class_list().contains("gd_active") || sel(&h).0 == Some(current.0.clone()));
+    assert!(!node_el(&current.0).class_list().contains("gd_active") || sel(&h).1 == Some(current.0.clone()));
     assert_eq!(s.peek_offset.get(), Vec2::default());
     assert_eq!(s.pan.get(), base + offset);
     let (cx, cy) = node_screen_center(&h, &current.0);
@@ -729,7 +777,7 @@ fn parallel_links_and_edge_editor() {
     mouse(&node_el("a"), 0);
     // Nothing to cycle without a selected link
     key("ArrowRight", false);
-    assert_eq!(sel(&h), (Some("a".into()), None));
+    assert_eq!(sel(&h), (None, Some("a".into())));
     // Forward selects a link; then the arrows across the flow cycle a's links
     key("ArrowDown", false);
     let first = h.widget.state().sel_edge.get().unwrap();
@@ -750,9 +798,12 @@ fn parallel_links_and_edge_editor() {
     key("L", false);
     assert!(matches!(h.widget.state().mode.get(), Mode::EditEdge(_)));
     key("Escape", false);
+    let primary = sel(&h).1;
+    // Exiting at the top level drops the anchor, keeping the primary node
     key("Escape", false);
-    assert_eq!(sel(&h), (Some("a".into()), None));
+    assert_eq!(sel(&h), (None, primary));
     assert_eq!(h.widget.state().mode.get(), Mode::Layers);
+    mouse(&node_el("a"), 0);
     key("ArrowDown", false);
     key("L", false);
     let edited = h.widget.state().sel_edge.get().unwrap();
@@ -863,7 +914,7 @@ fn rotated_flow() {
     assert!((e1.points[0].x - a.right()).abs() < 0.01, "{:?} vs {:?}", e1.points[0], a);
     // Right is now forward
     key("PageDown", false);
-    assert_eq!(sel(&h), (Some("a".into()), None));
+    assert_eq!(sel(&h), (None, Some("a".into())));
     key("ArrowRight", false);
     let (s, e) = sel(&h);
     assert_eq!(s, Some("a".into()));
@@ -874,10 +925,10 @@ fn rotated_flow() {
     assert!(e2.is_some() && e2 != e);
     key("ArrowUp", false);
     assert_eq!(sel(&h).1, e);
-    // Left is backward: it swaps start and end since the selection points forward
+    // Left is backward: it swaps the two since the selection points forward
     key("ArrowLeft", false);
     assert_eq!(sel(&h), (e.clone(), Some("a".into())));
-    // The overlay buttons: sibling below the end node, next to its left (the
+    // The overlay buttons: sibling below the primary node, next to its left (the
     // selected link now points backward, so a new link would too)
     let sibling = document().query_selector(".gd_overlay_button[title^=\"New sibling\"]").unwrap().expect("sibling button");
     let next = document().query_selector(".gd_overlay_button[title^=\"New node linked\"]").unwrap().expect("next button");
@@ -906,7 +957,7 @@ fn backward_moves_keep_pointing_backward() {
     key("ArrowUp", false);
     assert_eq!(sel(&h), (Some("b".into()), Some("a".into())));
     key("ArrowUp", false);
-    assert_eq!(sel(&h), (Some("a".into()), None));
+    assert_eq!(sel(&h), (None, Some("a".into())));
 }
 
 /// Every pane that Escape closes has a close button in its heading row that
@@ -944,25 +995,25 @@ fn screen_rect(e: &Element) -> (f64, f64, f64, f64) {
     return (r.left() - c.left(), r.top() - c.top(), r.right() - c.left(), r.bottom() - c.top());
 }
 
-/// Keyboard motions that leave the end node (partly) outside the viewport
+/// Keyboard motions that leave the primary node (partly) outside the viewport
 /// center it, whether it was off the far or the near side; ones that don't
 /// leave the view alone.
 #[wasm_bindgen_test]
-fn keyboard_follow_centers_end_node() {
+fn keyboard_follow_centers_primary_node() {
     let h = setup(sample_doc());
     let s = h.widget.state();
     key("PageDown", false);
     key("ArrowDown", false);
     let (vw, vh) = s.viewport.get();
     let end_center = || {
-        let e = sel(&h).1.expect("end node");
+        let e = sel(&h).1.expect("primary node");
         let (l, t, r, b) = screen_rect(&node_el(&e).query_selector(".gd_node").unwrap().unwrap());
         ((l + r) / 2., (t + b) / 2.)
     };
     let centered = |(x, y): (f64, f64)| (x - vw / 2.).abs() < 1. && (y - vh / 2.).abs() < 1.;
     // a's other child, which cycling the sibling will select
     let sibling = || NodeId(if sel(&h).1.as_deref() == Some("b") { "c".into() } else { "b".into() });
-    // Cycling the sibling makes the other child the end. Put that child off
+    // Cycling the sibling makes the other child primary. Put that child off
     // screen beforehand: past the far edge, past the near edge, and then
     // just poking out of the margin.
     for case in 0..3 {

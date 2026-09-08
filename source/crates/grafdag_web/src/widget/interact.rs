@@ -85,8 +85,8 @@ pub fn handle_key(state: &Rc<State>, ev: &KeyboardEvent) -> bool {
             "e" => state.cmd_edit(pc),
             "E" => state.cmd_edit_start(pc),
             "L" => state.cmd_edit_link(pc),
-            "/" => state.cmd_search(pc, SearchTarget::Start),
-            "?" => state.cmd_search(pc, SearchTarget::End),
+            "/" => state.cmd_search(pc, SearchTarget::Replace),
+            "?" => state.cmd_search(pc, SearchTarget::Extend),
             "+" | "=" => state.cmd_zoom(pc, 1.2, None),
             "-" => state.cmd_zoom(pc, 1. / 1.2, None),
             "0" => state.cmd_fit(pc),
@@ -152,8 +152,10 @@ pub fn attach_canvas(canvas: &El, state: &Rc<State>) {
                     ev.prevent_default();
                 },
                 2 => {
+                    // Right click on empty space drops the anchor, keeping the
+                    // primary node selected
                     state.eg.event(|pc| {
-                        state.set_end(pc, None);
+                        state.set_start(pc, None);
                     });
                 },
                 _ => { },
@@ -211,8 +213,7 @@ pub fn attach_canvas(canvas: &El, state: &Rc<State>) {
                     return;
                 };
                 state.eg.event(|pc| {
-                    state.set_start(pc, None);
-                    state.set_end(pc, None);
+                    state.clear_selection(pc);
                 });
             })
         }

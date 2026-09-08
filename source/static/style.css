@@ -243,14 +243,16 @@ html, body {
     cursor: pointer;
 }
 
+/* The primary selected node (gd_node_end) is solid; the anchor it's measured
+   against (gd_node_start) is dashed. */
 .gd_node_wrap.gd_node_start {
     border-color: var(--gd-sel-color);
-    border-style: solid;
+    border-style: dashed;
 }
 
 .gd_node_wrap.gd_node_end {
     border-color: var(--gd-sel-color);
-    border-style: dashed;
+    border-style: solid;
 }
 
 .gd_node {

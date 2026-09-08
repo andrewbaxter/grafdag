@@ -8,12 +8,12 @@
     {
       "id": "k8s",
       "name": "Kubernetes resources",
-      "active": true
+      "active": false
     },
     {
       "id": "infra",
       "name": "Cloud infra",
-      "active": true
+      "active": false
     }
   ],
   "selected_layer": "k8s",

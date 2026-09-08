@@ -664,8 +664,8 @@ fn build_search(pc: &mut ProcessingContext, state: &Rc<State>, target: SearchTar
         }
     }));
     let title = match target {
-        SearchTarget::Start => "Search (select start)",
-        SearchTarget::End => "Search (select end)",
+        SearchTarget::Replace => "Search (select node)",
+        SearchTarget::Extend => "Search (select second node)",
     };
     return closable_pane(state, "gd_search", title, vec![input, results]);
 }

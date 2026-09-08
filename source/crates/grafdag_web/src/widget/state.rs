@@ -66,8 +66,10 @@ impl Mul<f64> for Vec2 {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SearchTarget {
-    Start,
-    End,
+    /// The result becomes the whole selection.
+    Replace,
+    /// The result becomes the primary node, the current primary the anchor.
+    Extend,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -107,9 +109,14 @@ pub struct State {
     pub on_change: Box<dyn Fn(&Document)>,
     /// Bumped whenever the document changes.
     pub doc_version: HistPrim<u64>,
+    /// The anchor of a two-node selection (the link's source end). Only ever
+    /// set together with `sel_end`; see `set_selection`.
     pub sel_start: HistPrim<Option<NodeId>>,
+    /// The primary selected node: whatever is selected at all lives here, so
+    /// this is set whenever `sel_start` is.
     pub sel_end: HistPrim<Option<NodeId>>,
-    /// The selected link between the start and end nodes, if they're linked.
+    /// The selected link between the anchor and primary nodes, if they're
+    /// linked.
     pub sel_edge: HistPrim<Option<EdgeId>>,
     /// Node under the mouse.
     pub hover: HistPrim<Option<NodeId>>,
@@ -251,55 +258,102 @@ impl State {
     }
 
     fn after_change(&self, pc: &mut ProcessingContext) {
-        {
+        let (start, end) = {
             let doc = self.doc.borrow();
             // Drop selection of deleted nodes
-            if let Some(s) = self.sel_start.get() {
-                if doc.node(&s).is_none() {
-                    self.sel_start.set(pc, None);
-                }
-            }
-            if let Some(e) = self.sel_end.get() {
-                if doc.node(&e).is_none() {
-                    self.sel_end.set(pc, None);
-                }
-            }
+            let start = self.sel_start.get().filter(|s| doc.node(s).is_some());
+            let end = self.sel_end.get().filter(|e| doc.node(e).is_some());
             match self.mode.get() {
                 Mode::EditNode(n) if doc.node(&n).is_none() => self.mode.set(pc, Mode::Layers),
                 Mode::EditEdge(e) if doc.edge(&e).is_none() => self.mode.set(pc, Mode::Layers),
                 _ => { },
             }
             (self.on_change)(&doc);
-        }
-        self.sync_edge(pc);
+            (start, end)
+        };
+        // Deleting the primary node promotes the anchor, keeping the invariant.
+        self.set_selection(pc, start, end);
         self.bump(pc);
     }
 
+    /// Set both selection slots at once. This is the only place the selection
+    /// changes, and it enforces the invariant: either nothing is selected, or
+    /// there's a primary (end) node, optionally preceded by a distinct anchor
+    /// (start) node. A selection that would be left with only an anchor
+    /// becomes a lone primary instead.
+    pub fn set_selection(&self, pc: &mut ProcessingContext, start: Option<NodeId>, end: Option<NodeId>) {
+        let (start, end) = match (start, end) {
+            (Some(s), None) => (None, Some(s)),
+            (Some(s), Some(e)) if s == e => (None, Some(e)),
+            both => both,
+        };
+        if let Some(s) = &start {
+            self.touch_recent(s);
+        }
+        if let Some(e) = &end {
+            self.touch_recent(e);
+        }
+        self.sel_start.set(pc, start);
+        self.sel_end.set(pc, end);
+        self.sync_edge(pc);
+    }
+
+    /// Set the anchor (start) node, keeping the primary. Clearing the anchor
+    /// of a pair leaves the primary selected; setting one when there's no
+    /// primary makes it the primary.
     pub fn set_start(&self, pc: &mut ProcessingContext, id: Option<NodeId>) {
-        if let Some(id) = &id {
-            self.touch_recent(id);
-        }
-        self.sel_start.set(pc, id);
-        self.sync_edge(pc);
+        self.set_selection(pc, id, self.sel_end.get());
     }
 
+    /// Set the primary (end) node, keeping the anchor. Clearing the primary of
+    /// a pair promotes the anchor.
     pub fn set_end(&self, pc: &mut ProcessingContext, id: Option<NodeId>) {
-        if let Some(id) = &id {
-            self.touch_recent(id);
-        }
-        self.sel_end.set(pc, id);
-        self.sync_edge(pc);
+        self.set_selection(pc, self.sel_start.get(), id);
     }
 
-    /// Select a specific link (its endpoints become start and end).
+    /// Select one node, with no anchor.
+    pub fn select_only(&self, pc: &mut ProcessingContext, id: NodeId) {
+        self.set_selection(pc, None, Some(id));
+    }
+
+    pub fn clear_selection(&self, pc: &mut ProcessingContext) {
+        self.set_selection(pc, None, None);
+    }
+
+    /// Make `id` the primary node, keeping the current selection behind it as
+    /// the anchor.
+    pub fn extend_selection(&self, pc: &mut ProcessingContext, id: NodeId) {
+        self.set_selection(pc, self.anchor_node(), Some(id));
+    }
+
+    /// Primary click on a node: it becomes the whole selection, or is
+    /// deselected if it already is.
+    pub fn click_select(&self, pc: &mut ProcessingContext, id: &NodeId) {
+        if self.sel_end.get().as_ref() == Some(id) && self.sel_start.get().is_none() {
+            self.clear_selection(pc);
+        } else {
+            self.select_only(pc, id.clone());
+        }
+    }
+
+    /// Secondary click on a node: it becomes the primary node with the
+    /// previous selection as the anchor; clicking the primary node again drops
+    /// it, promoting the anchor.
+    pub fn click_extend(&self, pc: &mut ProcessingContext, id: &NodeId) {
+        if self.sel_end.get().as_ref() == Some(id) {
+            self.set_end(pc, None);
+        } else {
+            self.extend_selection(pc, id.clone());
+        }
+    }
+
+    /// Select a specific link (its source becomes the anchor, its dest the
+    /// primary).
     pub fn set_edge(&self, pc: &mut ProcessingContext, id: &EdgeId) {
         let Some(edge) = self.doc.borrow().edge(id).cloned() else {
             return;
         };
-        self.touch_recent(&edge.source);
-        self.touch_recent(&edge.dest);
-        self.sel_start.set(pc, Some(edge.source));
-        self.sel_end.set(pc, Some(edge.dest));
+        self.set_selection(pc, Some(edge.source), Some(edge.dest));
         self.sel_edge.set(pc, Some(id.clone()));
         self.close_stale_editor(pc);
     }
@@ -359,9 +413,17 @@ impl State {
         return self.recent.borrow().iter().position(|x| x == id).map(|p| p + 1).unwrap_or(0);
     }
 
-    /// The node the view/keyboard focuses on: the end node, or the start node.
+    /// The primary selected node: what the view follows and what the
+    /// single-node commands (edit, delete, enter/exit) act on.
     pub fn focus_node(&self) -> Option<NodeId> {
-        return self.sel_end.get().or(self.sel_start.get());
+        return self.sel_end.get();
+    }
+
+    /// The node the primary node is measured against: the anchor if there is
+    /// one, else the primary itself (used when a command extends a lone
+    /// selection into a pair).
+    pub fn anchor_node(&self) -> Option<NodeId> {
+        return self.sel_start.get().or(self.sel_end.get());
     }
 
     pub fn placed(&self, id: &NodeId) -> Option<PlacedNode> {

@@ -46,8 +46,9 @@ pub fn build_toolbar(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
         icon_button(state, "link", "Link start to end (l)", |s, pc| s.cmd_link(pc)),
     ];
     for b in &pair_buttons {
-        b.ref_own(|b| link!((_pc = pc), (start = state.sel_start.clone(), end = state.sel_end.clone()), (), (b = b.weak()) {
-            b.upgrade()?.ref_modify_classes(&[("gd_button_disabled", start.get().is_none() || end.get().is_none())]);
+        // A set anchor implies a primary node, so it alone means a pair
+        b.ref_own(|b| link!((_pc = pc), (start = state.sel_start.clone()), (), (b = b.weak()) {
+            b.upgrade()?.ref_modify_classes(&[("gd_button_disabled", start.get().is_none())]);
         }));
     }
     let edge_buttons = vec![
@@ -64,8 +65,8 @@ pub fn build_toolbar(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
         icon_button(state, "delete", "Delete node (Delete)", |s, pc| s.cmd_delete(pc)),
     ];
     for b in &focus_buttons {
-        b.ref_own(|b| link!((_pc = pc), (start = state.sel_start.clone(), end = state.sel_end.clone()), (), (b = b.weak()) {
-            b.upgrade()?.ref_modify_classes(&[("gd_button_disabled", start.get().is_none() && end.get().is_none())]);
+        b.ref_own(|b| link!((_pc = pc), (end = state.sel_end.clone()), (), (b = b.weak()) {
+            b.upgrade()?.ref_modify_classes(&[("gd_button_disabled", end.get().is_none())]);
         }));
     }
     let zoom = el("span").classes(&["gd_zoom"]).attr("title", "Zoom");
@@ -89,7 +90,7 @@ pub fn build_toolbar(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
     items.extend(pair_buttons);
     items.extend(edge_buttons);
     items.push(separator());
-    items.push(icon_button(state, "search", "Search (/)", |s, pc| s.cmd_search(pc, SearchTarget::Start)));
+    items.push(icon_button(state, "search", "Search (/)", |s, pc| s.cmd_search(pc, SearchTarget::Replace)));
     items.push(icon_button(state, "view_sidebar", "Toggle side panel (Tab)", |s, pc| s.cmd_toggle_panel(pc)));
     items.push(el("span").classes(&["gd_toolbar_spacer"]));
     items.push(status);

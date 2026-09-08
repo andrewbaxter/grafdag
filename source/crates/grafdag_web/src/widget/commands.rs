@@ -94,6 +94,15 @@ impl State {
         return out;
     }
 
+    /// Visible successors (`forward`) or predecessors of a node.
+    fn step_nodes(&self, id: &NodeId, forward: bool) -> Vec<NodeId> {
+        return if forward {
+            self.next_nodes(id)
+        } else {
+            self.prev_nodes(id)
+        };
+    }
+
     /// Sort nodes along the side axis.
     fn sort_by_x(&self, ids: &mut Vec<NodeId>) {
         let layout = self.layout.borrow();
@@ -133,20 +142,22 @@ impl State {
         return Some(list[j].clone());
     }
 
-    fn ensure_start(&self, pc: &mut ProcessingContext) -> Option<NodeId> {
-        if let Some(s) = self.sel_start.get() {
-            return Some(s);
+    /// The primary node, selecting the first visible node if nothing is
+    /// selected yet (movement commands start from somewhere).
+    fn ensure_focus(&self, pc: &mut ProcessingContext) -> Option<NodeId> {
+        if let Some(e) = self.focus_node() {
+            return Some(e);
         }
         let first = self.visible_nodes().into_iter().next()?;
-        self.set_start(pc, Some(first.clone()));
+        self.select_only(pc, first.clone());
         return Some(first);
     }
 
     // Selection movement
 
     /// An arrow key: its meaning depends on the layout's flow. Along the rank
-    /// axis it moves forward/backward (with shift: picks the end among the
-    /// start's successors/predecessors); along the side axis it cycles
+    /// axis it moves forward/backward (with shift: picks the primary node among
+    /// the anchor's successors/predecessors); along the side axis it cycles
     /// siblings.
     pub fn cmd_arrow(&self, pc: &mut ProcessingContext, dir: ScreenDir, shift: bool) {
         let flow = self.doc.borrow().flow;
@@ -167,8 +178,8 @@ impl State {
         self.commit(pc, vec![Action::SetFlow(next)], None);
     }
 
-    /// Cycle the selected link among the links on the same side of the start
-    /// node (each link counts, even several to the same node); the end node
+    /// Cycle the selected link among the links on the same side of the anchor
+    /// node (each link counts, even several to the same node); the primary node
     /// follows. Links on the other side aren't siblings, and without a
     /// selected link there's nothing to cycle.
     pub fn cmd_sibling(&self, pc: &mut ProcessingContext, dir: Dir) {
@@ -194,13 +205,13 @@ impl State {
             (i + n - 1) % n
         };
         let (edge, other) = edges[j].clone();
-        self.set_end(pc, Some(other));
+        self.set_selection(pc, Some(start), Some(other));
         self.sel_edge.set(pc, Some(edge));
     }
 
-    /// Whether the end node is placed after (Some(true)) or before
-    /// (Some(false)) the start node along the rank axis; None if there's no
-    /// end node or they're level.
+    /// Whether the primary node is placed after (Some(true)) or before
+    /// (Some(false)) the anchor node along the rank axis; None if there's no
+    /// anchor or they're level.
     fn selection_goes_forward(&self) -> Option<bool> {
         let (s, e) = self.selected_pair()?;
         let layout = self.layout.borrow();
@@ -216,91 +227,66 @@ impl State {
         return Some(ey > sy);
     }
 
-    /// Move forward along the rank axis. If the selection currently points
-    /// backward, this swaps start and end instead.
+    /// Step the primary node along the rank axis, trailing the node it came
+    /// from as the anchor. If the selection already points the other way, the
+    /// step swaps the two nodes instead. Stepping off the end of the graph
+    /// leaves the primary node selected on its own.
+    fn step(&self, pc: &mut ProcessingContext, forward: bool) {
+        self.follow.set(true);
+        if self.selection_goes_forward() == Some(!forward) {
+            self.cmd_flip(pc);
+            return;
+        }
+        let Some(focus) = self.ensure_focus(pc) else {
+            return;
+        };
+        let candidates: Vec<NodeId> = self.step_nodes(&focus, forward).into_iter().filter(|n| n != &focus).collect();
+        let pick = self.pick_recent(&candidates);
+        self.set_selection(pc, Some(focus), pick);
+    }
+
+    /// Move forward along the rank axis.
     pub fn cmd_forward(&self, pc: &mut ProcessingContext) {
-        self.follow.set(true);
-        if self.selection_goes_forward() == Some(false) {
-            self.cmd_flip(pc);
-            return;
-        }
-        let Some(start) = self.ensure_start(pc) else {
-            return;
-        };
-        match self.sel_end.get() {
-            None => {
-                let next = self.next_nodes(&start);
-                let pick = self.pick_recent(&next);
-                self.set_end(pc, pick);
-            },
-            Some(end) => {
-                let next: Vec<NodeId> = self.next_nodes(&end).into_iter().filter(|n| n != &end).collect();
-                let pick = self.pick_recent(&next);
-                self.set_start(pc, Some(end));
-                self.set_end(pc, pick);
-            },
-        }
+        self.step(pc, true);
     }
 
-    /// Move backward along the rank axis. If the selection currently points
-    /// forward, this swaps start and end instead.
+    /// Move backward along the rank axis.
     pub fn cmd_backward(&self, pc: &mut ProcessingContext) {
-        self.follow.set(true);
-        if self.selection_goes_forward() == Some(true) {
-            self.cmd_flip(pc);
-            return;
-        }
-        let Some(start) = self.ensure_start(pc) else {
-            return;
-        };
-        match self.sel_end.get() {
-            None => {
-                let prev = self.prev_nodes(&start);
-                let pick = self.pick_recent(&prev);
-                self.set_end(pc, pick);
-            },
-            Some(end) => {
-                // Mirror cmd_forward: the end leads, the start trails, so the
-                // selection keeps pointing backward.
-                let prev: Vec<NodeId> = self.prev_nodes(&end).into_iter().filter(|n| n != &end).collect();
-                let pick = self.pick_recent(&prev);
-                self.set_start(pc, Some(end));
-                self.set_end(pc, pick);
-            },
-        }
+        self.step(pc, false);
     }
 
-    /// Select the end node from the start node's successors (cycling).
+    /// Cycle the primary node among the anchor's successors/predecessors. With
+    /// a single node selected that node becomes the anchor, so this extends
+    /// the selection into a pair.
+    fn cycle_relative(&self, pc: &mut ProcessingContext, forward: bool) {
+        self.follow.set(true);
+        if self.ensure_focus(pc).is_none() {
+            return;
+        }
+        let Some(anchor) = self.anchor_node() else {
+            return;
+        };
+        let candidates = self.step_nodes(&anchor, forward);
+        let end = self.sel_end.get();
+        self.set_selection(pc, Some(anchor), Self::cycle(&candidates, end.as_ref(), true));
+    }
+
+    /// Select the primary node from the anchor's successors (cycling).
     pub fn cmd_select_next(&self, pc: &mut ProcessingContext) {
-        self.follow.set(true);
-        let Some(start) = self.ensure_start(pc) else {
-            return;
-        };
-        let next = self.next_nodes(&start);
-        let end = self.sel_end.get();
-        self.set_end(pc, Self::cycle(&next, end.as_ref(), true));
+        self.cycle_relative(pc, true);
     }
 
-    /// Select the end node from the start node's predecessors (cycling).
+    /// Select the primary node from the anchor's predecessors (cycling).
     pub fn cmd_select_prev(&self, pc: &mut ProcessingContext) {
-        self.follow.set(true);
-        let Some(start) = self.ensure_start(pc) else {
-            return;
-        };
-        let prev = self.prev_nodes(&start);
-        let end = self.sel_end.get();
-        self.set_end(pc, Self::cycle(&prev, end.as_ref(), true));
+        self.cycle_relative(pc, false);
     }
 
     pub fn cmd_flip(&self, pc: &mut ProcessingContext) {
         self.follow.set(true);
-        let s = self.sel_start.get();
-        let e = self.sel_end.get();
-        if e.is_none() {
+        let (Some(s), Some(e)) = (self.sel_start.get(), self.sel_end.get()) else {
             return;
-        }
-        self.set_start(pc, e);
-        self.set_end(pc, s);
+        };
+        self.set_selection(pc, Some(e), Some(s));
     }
 
     pub fn cmd_island(&self, pc: &mut ProcessingContext, forward: bool) {
@@ -320,8 +306,7 @@ impl State {
             },
         };
         let root = layout.islands[target].ranks.first().and_then(|r| r.first()).map(|p| p.node.clone());
-        self.set_start(pc, root);
-        self.set_end(pc, None);
+        self.set_selection(pc, None, root);
     }
 
     /// Escape: close an open pane (editor/search) if any, else exit.
@@ -350,17 +335,7 @@ impl State {
         return n.parents.iter().filter(|p| visible.contains(p)).cloned().collect();
     }
 
-    /// Replace the focused node (the end node, or the start node if there's
-    /// no end) with `id`.
-    fn set_focus(&self, pc: &mut ProcessingContext, id: NodeId) {
-        if self.sel_end.get().is_some() {
-            self.set_end(pc, Some(id));
-        } else {
-            self.set_start(pc, Some(id));
-        }
-    }
-
-    /// Enter: select a child of the focused node (the most recently selected
+    /// Enter: select a child of the primary node (the most recently selected
     /// one, else the first).
     pub fn cmd_enter(&self, pc: &mut ProcessingContext) {
         self.follow.set(true);
@@ -369,21 +344,21 @@ impl State {
         };
         let children = self.child_nodes(&focus);
         if let Some(child) = self.pick_recent(&children) {
-            self.set_focus(pc, child);
+            self.set_end(pc, Some(child));
         }
     }
 
-    /// Exit: select the parent of the focused node. At the top level (no
-    /// parent) this clears the end node, then the start node.
+    /// Exit: select the parent of the primary node. At the top level (no
+    /// parent) this drops the anchor, then the primary node.
     pub fn cmd_exit(&self, pc: &mut ProcessingContext) {
         self.follow.set(true);
         let parent = self.focus_node().and_then(|f| self.pick_recent(&self.parent_nodes(&f)));
         if let Some(parent) = parent {
-            self.set_focus(pc, parent);
-        } else if self.sel_end.get().is_some() {
-            self.set_end(pc, None);
-        } else {
+            self.set_end(pc, Some(parent));
+        } else if self.sel_start.get().is_some() {
             self.set_start(pc, None);
+        } else {
+            self.clear_selection(pc);
         }
     }
 
@@ -514,91 +489,59 @@ impl State {
         return id;
     }
 
-    /// Create a node linked from the end node (or the start node if no end),
-    /// then move the selection forward onto it and edit it.
-    pub fn cmd_new_next(&self, pc: &mut ProcessingContext) {
-        self.follow.set(true);
-        let inward = self.inward_direction();
-        let id = match (self.sel_start.get(), self.sel_end.get()) {
-            (Some(s), Some(e)) => {
-                let id = self.create_linked(pc, Some(&e), &e, inward);
-                let _ = s;
-                self.set_start(pc, Some(e));
-                id
-            },
-            (Some(s), None) => {
-                let id = self.create_linked(pc, Some(&s), &s, false);
-                id
-            },
-            (None, _) => {
-                let reference = NodeId("".into());
-                let id = self.create_linked(pc, None, &reference, false);
-                self.set_start(pc, Some(id.clone()));
-                self.set_end(pc, None);
-                self.mode.set(pc, Mode::EditNode(id.clone()));
-                return;
-            },
-        };
-        self.set_end(pc, Some(id.clone()));
+    /// Create a node, select it as the primary node with `anchor` behind it,
+    /// and open its editor.
+    fn create_selected(&self, pc: &mut ProcessingContext, from: Option<NodeId>, reference: &NodeId, inward: bool) {
+        let id = self.create_linked(pc, from.as_ref(), reference, inward);
+        self.set_selection(pc, from, Some(id.clone()));
         self.mode.set(pc, Mode::EditNode(id));
     }
 
+    /// Create a node linked from the primary node, then move the selection
+    /// forward onto it and edit it.
+    pub fn cmd_new_next(&self, pc: &mut ProcessingContext) {
+        self.follow.set(true);
+        let inward = self.inward_direction();
+        match self.focus_node() {
+            Some(focus) => self.create_selected(pc, Some(focus.clone()), &focus, inward),
+            None => self.create_selected(pc, None, &NodeId("".into()), false),
+        }
+    }
+
+    /// The node a new sibling of the primary node would be linked from: the
+    /// anchor if there is one, else the primary node's predecessor.
+    fn sibling_source(&self) -> Option<NodeId> {
+        if let Some(s) = self.sel_start.get() {
+            return Some(s);
+        }
+        return self.pick_recent(&self.prev_nodes(&self.focus_node()?));
+    }
+
     /// Whether a new sibling would be linked to something (vs. becoming a new
-    /// island): the end node's sibling is linked from the start node; a lone
-    /// start node's sibling is linked from its predecessor.
+    /// island).
     pub fn sibling_possible(&self) -> bool {
-        return match (self.sel_start.get(), self.sel_end.get()) {
-            (Some(_), Some(_)) => true,
-            (Some(s), None) => !self.prev_nodes(&s).is_empty(),
-            (None, _) => false,
-        };
+        return self.sibling_source().is_some();
     }
 
     /// Create an unlinked node (a new island), select it and edit it.
     pub fn cmd_new_island(&self, pc: &mut ProcessingContext) {
         self.follow.set(true);
-        let id = self.create_linked(pc, None, &NodeId("".into()), false);
-        self.set_start(pc, Some(id.clone()));
-        self.set_end(pc, None);
-        self.mode.set(pc, Mode::EditNode(id));
+        self.create_selected(pc, None, &NodeId("".into()), false);
     }
 
-    /// Create a node linked from the start node (a sibling of the end node),
-    /// select it as the end node and edit it.
+    /// Create a sibling of the primary node (linked from the same node it
+    /// hangs off), select it as the primary node and edit it.
     pub fn cmd_new_sibling(&self, pc: &mut ProcessingContext) {
         self.follow.set(true);
         let inward = self.inward_direction();
-        let id = match (self.sel_start.get(), self.sel_end.get()) {
-            (Some(s), Some(e)) => {
-                self.create_linked(pc, Some(&s), &e, inward)
-            },
-            (Some(s), None) => {
-                // Sibling of the start node: linked from its predecessor if any
-                let prev = self.prev_nodes(&s);
-                let from = self.pick_recent(&prev);
-                let id = self.create_linked(pc, from.as_ref(), &s, false);
-                if let Some(from) = from {
-                    self.set_start(pc, Some(from));
-                }
-                id
-            },
-            (None, _) => {
-                let id = self.create_linked(pc, None, &NodeId("".into()), false);
-                self.set_start(pc, Some(id.clone()));
-                self.set_end(pc, None);
-                self.mode.set(pc, Mode::EditNode(id.clone()));
-                return;
-            },
-        };
-        self.set_end(pc, Some(id.clone()));
-        self.mode.set(pc, Mode::EditNode(id));
+        let from = self.sibling_source();
+        let reference = self.focus_node().unwrap_or_else(|| NodeId("".into()));
+        self.create_selected(pc, from, &reference, inward);
     }
 
     pub fn cmd_delete(&self, pc: &mut ProcessingContext) {
-        let target = match (self.sel_start.get(), self.sel_end.get()) {
-            (_, Some(e)) => e,
-            (Some(s), None) => s,
-            _ => return,
+        let Some(target) = self.focus_node() else {
+            return;
         };
         let actions = delete_node_actions(&self.doc.borrow(), &target);
         self.commit(pc, actions, None);
@@ -609,7 +552,7 @@ impl State {
         self.commit(pc, actions, None);
     }
 
-    /// Edit the end node (or the start node if there's no end node).
+    /// Edit the primary node.
     pub fn cmd_edit(&self, pc: &mut ProcessingContext) {
         let Some(target) = self.focus_node() else {
             return;
@@ -617,6 +560,7 @@ impl State {
         self.mode.set(pc, Mode::EditNode(target));
     }
 
+    /// Edit the anchor node.
     pub fn cmd_edit_start(&self, pc: &mut ProcessingContext) {
         let Some(target) = self.sel_start.get() else {
             return;
@@ -631,9 +575,6 @@ impl State {
     }
 
     pub fn cmd_search(&self, pc: &mut ProcessingContext, target: SearchTarget) {
-        if target == SearchTarget::Start {
-            self.set_end(pc, None);
-        }
         self.search_query.set(pc, "".to_string());
         self.search_index.set(pc, 0);
         self.mode.set(pc, Mode::Search(target));
@@ -720,17 +661,8 @@ impl State {
         self.fold_peek(pc);
         self.follow.set(true);
         match target {
-            SearchTarget::Start => {
-                self.set_start(pc, Some(id.clone()));
-                self.set_end(pc, None);
-            },
-            SearchTarget::End => {
-                if self.sel_start.get().is_none() {
-                    self.set_start(pc, Some(id.clone()));
-                } else {
-                    self.set_end(pc, Some(id.clone()));
-                }
-            },
+            SearchTarget::Replace => self.select_only(pc, id.clone()),
+            SearchTarget::Extend => self.extend_selection(pc, id.clone()),
         }
         self.mode.set(pc, Mode::Layers);
     }
@@ -766,7 +698,7 @@ impl State {
         self.pan.set(pc, v);
     }
 
-    /// Pan so the focused node is visible (called after layout when `follow`
+    /// Pan so the primary node is visible (called after layout when `follow`
     /// is set): if any part of it is outside the viewport (less a margin),
     /// ease the view to center it. A minimal nudge would leave it hugging the
     /// edge, with whatever comes next in that direction still hidden.
