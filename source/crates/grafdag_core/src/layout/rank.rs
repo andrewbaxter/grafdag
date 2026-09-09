@@ -1,25 +1,28 @@
-//! Islands, cycle breaking and rank assignment.
-use {
-    std::collections::HashSet,
-};
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[derive(Clone, Debug)]
-pub struct Ranking {
-    /// Island index per member.
-    pub island: Vec<usize>,
-    /// Rank per member (0 = first rank of its island).
-    pub rank: Vec<usize>,
-    /// Members per island, in island order.
-    pub islands: Vec<Vec<usize>>,
-    /// Number of ranks per island.
-    pub n_ranks: Vec<usize>,
+    #[test]
+    fn chain_and_cycle() {
+        let r = rank(4, &[(0, 1), (1, 2), (2, 0)], &[f64::MAX; 4]);
+        assert_eq!(r.islands.len(), 2);
+        assert_eq!(r.rank[0], 0);
+        assert_eq!(r.rank[1], 1);
+        assert_eq!(r.rank[2], 2);
+        assert_eq!(r.n_ranks[r.island[0]], 3);
+        assert_eq!(r.rank[3], 0);
+    }
+
+    #[test]
+    fn source_pulled_down() {
+        let r = rank(4, &[(0, 1), (1, 2), (3, 2)], &[f64::MAX; 4]);
+        assert_eq!(r.rank[3], 1);
+    }
 }
 
-/// `edges` are directed (source, dest) pairs between member indices.
-/// `prev_order` gives a previous horizontal position per member (or `f64::MAX`)
-/// used to order islands stably.
+use std::collections::HashSet;
+
 pub fn rank(n: usize, edges: &[(usize, usize)], prev_order: &[f64]) -> Ranking {
-    // Islands via union-find
     let mut uf: Vec<usize> = (0 .. n).collect();
 
     fn find(uf: &mut Vec<usize>, mut i: usize) -> usize {
@@ -41,7 +44,10 @@ pub fn rank(n: usize, edges: &[(usize, usize)], prev_order: &[f64]) -> Ranking {
         }
     }
     let mut roots: Vec<usize> = vec![];
-    let mut island_of_root: Vec<Option<usize>> = vec![None; n];
+    let mut island_of_root: Vec<Option<usize>> = vec![
+        None;
+        n
+    ];
     let mut islands: Vec<Vec<usize>> = vec![];
     for i in 0 .. n {
         let r = find(&mut uf, i);
@@ -57,8 +63,6 @@ pub fn rank(n: usize, edges: &[(usize, usize)], prev_order: &[f64]) -> Ranking {
         };
         islands[island].push(i);
     }
-
-    // Order islands by previous position, then first member
     let mut island_keys: Vec<(f64, usize, usize)> =
         islands
             .iter()
@@ -67,16 +71,23 @@ pub fn rank(n: usize, edges: &[(usize, usize)], prev_order: &[f64]) -> Ranking {
             .collect();
     island_keys.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.cmp(&b.1)));
     let islands: Vec<Vec<usize>> = island_keys.iter().map(|k| islands[k.2].clone()).collect();
-    let mut island = vec![0; n];
+    let mut island = vec![
+        0;
+        n
+    ];
     for (i, ms) in islands.iter().enumerate() {
         for m in ms {
             island[*m] = i;
         }
     }
-
-    // Adjacency
-    let mut out_edges: Vec<Vec<usize>> = vec![vec![]; n];
-    let mut in_degree = vec![0usize; n];
+    let mut out_edges: Vec<Vec<usize>> = vec![
+        vec![];
+        n
+    ];
+    let mut in_degree = vec![
+        0usize;
+        n
+    ];
     for (a, b) in edges {
         if a == b {
             continue;
@@ -84,17 +95,17 @@ pub fn rank(n: usize, edges: &[(usize, usize)], prev_order: &[f64]) -> Ranking {
         out_edges[*a].push(*b);
         in_degree[*b] += 1;
     }
-
-    // Cycle breaking: DFS, edges to nodes on the stack are reversed
     let mut reversed: HashSet<(usize, usize)> = HashSet::new();
-    let mut color = vec![0u8; n];
+    let mut color = vec![
+        0u8;
+        n
+    ];
     let mut start_order: Vec<usize> = (0 .. n).collect();
     start_order.sort_by_key(|i| (in_degree[*i] > 0, *i));
     for start in start_order {
         if color[start] != 0 {
             continue;
         }
-        // (node, next child index)
         let mut stack: Vec<(usize, usize)> = vec![(start, 0)];
         color[start] = 1;
         while let Some((node, child_i)) = stack.last().cloned() {
@@ -117,10 +128,14 @@ pub fn rank(n: usize, edges: &[(usize, usize)], prev_order: &[f64]) -> Ranking {
             }
         }
     }
-
-    // DAG adjacency after reversal
-    let mut dag_out: Vec<Vec<usize>> = vec![vec![]; n];
-    let mut dag_in: Vec<Vec<usize>> = vec![vec![]; n];
+    let mut dag_out: Vec<Vec<usize>> = vec![
+        vec![];
+        n
+    ];
+    let mut dag_in: Vec<Vec<usize>> = vec![
+        vec![];
+        n
+    ];
     for (a, b) in edges {
         if a == b {
             continue;
@@ -133,9 +148,10 @@ pub fn rank(n: usize, edges: &[(usize, usize)], prev_order: &[f64]) -> Ranking {
         dag_out[a].push(b);
         dag_in[b].push(a);
     }
-
-    // Longest path ranking via topological order (Kahn)
-    let mut rank = vec![0usize; n];
+    let mut rank = vec![
+        0usize;
+        n
+    ];
     let mut remaining: Vec<usize> = dag_in.iter().map(|x| x.len()).collect();
     let mut queue: Vec<usize> = (0 .. n).filter(|i| remaining[*i] == 0).collect();
     let mut topo = vec![];
@@ -151,17 +167,16 @@ pub fn rank(n: usize, edges: &[(usize, usize)], prev_order: &[f64]) -> Ranking {
             }
         }
     }
-
-    // Pull sources down towards their successors to shorten edges
     for node in 0 .. n {
         if dag_in[node].is_empty() && !dag_out[node].is_empty() {
             let min_succ = dag_out[node].iter().map(|s| rank[*s]).min().unwrap();
             rank[node] = min_succ - 1;
         }
     }
-
-    // Normalize per island
-    let mut n_ranks = vec![0usize; islands.len()];
+    let mut n_ranks = vec![
+        0usize;
+        islands.len()
+    ];
     for (i, ms) in islands.iter().enumerate() {
         let min = ms.iter().map(|m| rank[*m]).min().unwrap_or(0);
         for m in ms {
@@ -177,26 +192,10 @@ pub fn rank(n: usize, edges: &[(usize, usize)], prev_order: &[f64]) -> Ranking {
     };
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn chain_and_cycle() {
-        // 0 -> 1 -> 2 -> 0 (cycle), 3 isolated
-        let r = rank(4, &[(0, 1), (1, 2), (2, 0)], &[f64::MAX; 4]);
-        assert_eq!(r.islands.len(), 2);
-        assert_eq!(r.rank[0], 0);
-        assert_eq!(r.rank[1], 1);
-        assert_eq!(r.rank[2], 2);
-        assert_eq!(r.n_ranks[r.island[0]], 3);
-        assert_eq!(r.rank[3], 0);
-    }
-
-    #[test]
-    fn source_pulled_down() {
-        // 0 -> 1 -> 2, 3 -> 2: 3 should be at rank 1, not 0
-        let r = rank(4, &[(0, 1), (1, 2), (3, 2)], &[f64::MAX; 4]);
-        assert_eq!(r.rank[3], 1);
-    }
+#[derive(Clone, Debug)]
+pub struct Ranking {
+    pub island: Vec<usize>,
+    pub islands: Vec<Vec<usize>>,
+    pub n_ranks: Vec<usize>,
+    pub rank: Vec<usize>,
 }

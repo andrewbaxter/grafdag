@@ -1,37 +1,18 @@
 use {
+    lunk::{
+        ProcessingContext,
+        link,
+    },
+    rooting::{
+        El,
+        el,
+    },
+    std::rc::Rc,
     super::state::{
         SearchTarget,
         State,
     },
-    lunk::{
-        link,
-        ProcessingContext,
-    },
-    rooting::{
-        el,
-        El,
-    },
-    std::rc::Rc,
 };
-
-pub fn icon_button(state: &Rc<State>, icon: &str, title: &str, cb: impl Fn(&State, &mut ProcessingContext) + 'static) -> El {
-    let weak = Rc::downgrade(state);
-    return el("button")
-        .classes(&["gd_button"])
-        .attr("title", title)
-        .attr("type", "button")
-        .push(el("span").classes(&["gd_icon"]).text(icon))
-        .on("click", move |_| {
-            let Some(state) = weak.upgrade() else {
-                return;
-            };
-            state.eg.event(|pc| cb(&state, pc));
-        });
-}
-
-fn separator() -> El {
-    return el("span").classes(&["gd_toolbar_sep"]);
-}
 
 pub fn build_toolbar(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
     let undo = icon_button(state, "undo", "Undo (z)", |s, pc| s.undo(pc));
@@ -42,29 +23,28 @@ pub fn build_toolbar(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
     redo.ref_own(|redo| link!((_pc = pc), (can = state.can_redo.clone()), (), (redo = redo.weak()) {
         redo.upgrade()?.ref_modify_classes(&[("gd_button_disabled", !can.get())]);
     }));
-    let pair_buttons = vec![
-        icon_button(state, "link", "Link start to end (l)", |s, pc| s.cmd_link(pc)),
-    ];
+    let pair_buttons = vec![icon_button(state, "link", "Link start to end (l)", |s, pc| s.cmd_link(pc))];
     for b in &pair_buttons {
-        // A set anchor implies a primary node, so it alone means a pair
         b.ref_own(|b| link!((_pc = pc), (start = state.sel_start.clone()), (), (b = b.weak()) {
             b.upgrade()?.ref_modify_classes(&[("gd_button_disabled", start.get().is_none())]);
         }));
     }
-    let edge_buttons = vec![
-        icon_button(state, "edit_note", "Edit selected link (L)", |s, pc| s.cmd_edit_link(pc)),
-        icon_button(state, "link_off", "Delete selected link (u)", |s, pc| s.cmd_unlink(pc)),
-        icon_button(state, "swap_vert", "Reverse selected link (r)", |s, pc| s.cmd_reverse(pc)),
-    ];
+    let edge_buttons =
+        vec![
+            icon_button(state, "edit_note", "Edit selected link (L)", |s, pc| s.cmd_edit_link(pc)),
+            icon_button(state, "link_off", "Delete selected link (u)", |s, pc| s.cmd_unlink(pc)),
+            icon_button(state, "swap_vert", "Reverse selected link (r)", |s, pc| s.cmd_reverse(pc)),
+        ];
     for b in &edge_buttons {
         b.ref_own(|b| link!((_pc = pc), (edge = state.sel_edge.clone()), (), (b = b.weak()) {
             b.upgrade()?.ref_modify_classes(&[("gd_button_disabled", edge.get().is_none())]);
         }));
     }
-    let focus_buttons = vec![
-        icon_button(state, "edit", "Edit node (e)", |s, pc| s.cmd_edit(pc)),
-        icon_button(state, "delete", "Delete node (Delete)", |s, pc| s.cmd_delete(pc)),
-    ];
+    let focus_buttons =
+        vec![
+            icon_button(state, "edit", "Edit node (e)", |s, pc| s.cmd_edit(pc)),
+            icon_button(state, "delete", "Delete node (Delete)", |s, pc| s.cmd_delete(pc)),
+        ];
     for b in &focus_buttons {
         b.ref_own(|b| link!((_pc = pc), (end = state.sel_end.clone()), (), (b = b.weak()) {
             b.upgrade()?.ref_modify_classes(&[("gd_button_disabled", end.get().is_none())]);
@@ -99,4 +79,28 @@ pub fn build_toolbar(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
     items.push(el("span").classes(&["gd_toolbar_spacer"]));
     items.push(status);
     return el("div").classes(&["gd_toolbar"]).extend(items);
+}
+
+pub fn icon_button(
+    state: &Rc<State>,
+    icon: &str,
+    title: &str,
+    cb: impl Fn(&State, &mut ProcessingContext) + 'static,
+) -> El {
+    let weak = Rc::downgrade(state);
+    return el("button")
+        .classes(&["gd_button"])
+        .attr("title", title)
+        .attr("type", "button")
+        .push(el("span").classes(&["gd_icon"]).text(icon))
+        .on("click", move |_| {
+            let Some(state) = weak.upgrade() else {
+                return;
+            };
+            state.eg.event(|pc| cb(&state, pc));
+        });
+}
+
+fn separator() -> El {
+    return el("span").classes(&["gd_toolbar_sep"]);
 }

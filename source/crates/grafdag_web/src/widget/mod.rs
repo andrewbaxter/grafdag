@@ -1,22 +1,17 @@
-//! The DAG editor widget: a canvas with a toolbar and side panel.
-//!
-//! Reactivity is via `lunk` (all reactive properties are prims); DOM
-//! ownership is via `rooting`. Styling is entirely in CSS; the widget only
-//! sets classes, attributes and positions/sizes.
 pub mod anim;
-pub mod state;
 pub mod commands;
-pub mod render;
 pub mod interact;
 pub mod panel;
+pub mod render;
+pub mod state;
 pub mod toolbar;
 
 use {
     grafdag_core::Document,
     lunk::EventGraph,
     rooting::{
-        el,
         El,
+        el,
     },
     state::State,
     std::rc::Rc,
@@ -28,8 +23,10 @@ pub struct Widget {
 }
 
 impl Widget {
-    /// Create the widget. `on_change` is called with the new document after
-    /// every modification (use it to persist the document).
+    pub fn el(&self) -> &El {
+        return &self.root;
+    }
+
     pub fn new(eg: &EventGraph, doc: Document, on_change: Box<dyn Fn(&Document)>) -> Widget {
         let (root, state) = eg.event(|pc| {
             let state = State::new(pc, eg.clone(), doc, on_change);
@@ -47,12 +44,6 @@ impl Widget {
         };
     }
 
-    pub fn el(&self) -> &El {
-        return &self.root;
-    }
-
-    /// Measure and lay out the document. Call once after the widget's element
-    /// is attached to the document (text can't be measured before that).
     pub fn refresh(&self) {
         let state = self.state.clone();
         self.state.eg.event(|pc| {

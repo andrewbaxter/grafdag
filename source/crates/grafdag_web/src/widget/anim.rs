@@ -1,10 +1,7 @@
-//! Animation driver: a `lunk` `Animator` stepped from `requestAnimationFrame`
-//! while animations are running, honoring the browser's reduced-motion
-//! setting.
 use {
     gloo_render::{
-        request_animation_frame,
         AnimationFrame,
+        request_animation_frame,
     },
     gloo_utils::window,
     lunk::{
@@ -20,27 +17,23 @@ use {
     },
 };
 
-/// Duration of transitions in milliseconds.
 pub const TRANSITION_MS: f64 = 250.;
 
-/// Quad-out easing, as a plain fn for `set_ease`.
 pub fn ease(t: f64) -> f64 {
     return ezing::quad_out(t);
 }
 
-/// Whether the browser asks for reduced motion.
-pub fn prefers_reduced_motion() -> bool {
-    return window().match_media("(prefers-reduced-motion: reduce)").ok().flatten().map(|m| m.matches()).unwrap_or(false);
-}
-
-/// Create an animator that steps itself from animation frames whenever an
-/// animation is started.
 pub fn new_animator(eg: &EventGraph) -> Animator {
     let anim = Animator::new();
     let frame: Rc<RefCell<Option<AnimationFrame>>> = Rc::new(RefCell::new(None));
     let last_ts: Rc<Cell<Option<f64>>> = Rc::new(Cell::new(None));
 
-    fn next_frame(frame: Rc<RefCell<Option<AnimationFrame>>>, last_ts: Rc<Cell<Option<f64>>>, eg: EventGraph, anim: Animator) {
+    fn next_frame(
+        frame: Rc<RefCell<Option<AnimationFrame>>>,
+        last_ts: Rc<Cell<Option<f64>>>,
+        eg: EventGraph,
+        anim: Animator,
+    ) {
         let handle = request_animation_frame({
             let frame = frame.clone();
             let last_ts = last_ts.clone();
@@ -69,4 +62,13 @@ pub fn new_animator(eg: &EventGraph) -> Animator {
         }
     });
     return anim;
+}
+
+pub fn prefers_reduced_motion() -> bool {
+    return window()
+        .match_media("(prefers-reduced-motion: reduce)")
+        .ok()
+        .flatten()
+        .map(|m| m.matches())
+        .unwrap_or(false);
 }

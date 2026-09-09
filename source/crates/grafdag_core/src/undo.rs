@@ -1,33 +1,94 @@
-//! Undo/redo. A change to the document is expressed as a list of `Action`s
-//! applied atomically as one "level". Applying an action returns the inverse
-//! action; the inverses are stored in the undo stack. Undoing a level applies
-//! its stored actions and pushes the resulting inverses onto the redo stack
-//! (and vice versa).
-use {
-    crate::document::{
-        Document,
-        Edge,
-        EdgeId,
-        Layer,
-        LayerId,
-        Node,
-        NodeId,
-    },
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn coalesce() {
+        let mut doc = Document::default();
+        let mut h = History::default();
+        h.commit(&mut doc, vec![Action::NodeCreate {
+            node: node("a"),
+            index: None,
+        }], 0., None);
+        let key = CoalesceKey {
+            target: "a".into(),
+            field: "text".into(),
+        };
+        for (i, t) in ["x", "xy", "xyz"].iter().enumerate() {
+            let mut n = doc.node(&NodeId("a".into())).unwrap().clone();
+            n.text = t.to_string();
+            h.commit(&mut doc, vec![Action::NodeModify(n)], 1000. + i as f64 * 50., Some(key.clone()));
+        }
+        assert_eq!(h.undo.len(), 2);
+        h.undo(&mut doc, 2000.);
+        assert_eq!(doc.node(&NodeId("a".into())).unwrap().text, "a");
+        h.redo(&mut doc, 2000.);
+        assert_eq!(doc.node(&NodeId("a".into())).unwrap().text, "xyz");
+    }
+
+    fn node(id: &str) -> Node {
+        return Node {
+            id: NodeId(id.to_string()),
+            text: id.to_string(),
+            layers: vec![],
+            parents: vec![],
+        };
+    }
+
+    #[test]
+    fn undo_redo_roundtrip() {
+        let mut doc = Document::default();
+        let mut h = History::default();
+        h.commit(&mut doc, vec![Action::NodeCreate {
+            node: node("a"),
+            index: None,
+        }], 0., None);
+        h.commit(&mut doc, vec![Action::NodeCreate {
+            node: node("b"),
+            index: None,
+        }], 1000., None);
+        let e = Edge {
+            id: EdgeId("e".into()),
+            text: "".into(),
+            source: NodeId("a".into()),
+            dest: NodeId("b".into()),
+            layer: None,
+        };
+        h.commit(&mut doc, vec![Action::EdgeCreate {
+            edge: e,
+            index: None,
+        }], 2000., None);
+        let full = doc.clone();
+        let actions = delete_node_actions(&doc, &NodeId("a".into()));
+        h.commit(&mut doc, actions, 3000., None);
+        assert_eq!(doc.nodes.len(), 1);
+        assert_eq!(doc.edges.len(), 0);
+        assert!(h.undo(&mut doc, 4000.));
+        assert_eq!(doc, full);
+        assert_eq!(doc.nodes[0].id.0, "a");
+        assert!(h.redo(&mut doc, 5000.));
+        assert_eq!(doc.nodes.len(), 1);
+        assert!(h.undo(&mut doc, 6000.));
+        assert!(h.undo(&mut doc, 6000.));
+        assert_eq!(doc.edges.len(), 0);
+        assert_eq!(doc.nodes.len(), 2);
+    }
+}
+
+use crate::document::{
+    Document,
+    Edge,
+    EdgeId,
+    Layer,
+    LayerId,
+    Node,
+    NodeId,
 };
 
-/// Changes to the same target of the same kind within this window are coalesced
-/// into one undo level (e.g. typing).
 pub const COALESCE_MS: f64 = 200.;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
-    NodeCreate {
-        node: Node,
-        index: Option<usize>,
-    },
-    NodeDelete(NodeId),
-    /// Replace the node with the same id.
-    NodeModify(Node),
     EdgeCreate {
         edge: Edge,
         index: Option<usize>,
@@ -40,20 +101,16 @@ pub enum Action {
     },
     LayerDelete(LayerId),
     LayerModify(Layer),
+    NodeCreate {
+        node: Node,
+        index: Option<usize>,
+    },
+    NodeDelete(NodeId),
+    NodeModify(Node),
     SelectLayer(Option<LayerId>),
     SetFlow(crate::layout::Flow),
 }
 
-/// Identifies the kind of modification, for coalescing successive edits (e.g.
-/// typing into the same text field).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CoalesceKey {
-    pub target: String,
-    pub field: String,
-}
-
-/// Apply an action to the document, returning the inverse action. Actions that
-/// don't apply (missing ids) are no-ops returning an inverse no-op.
 pub fn apply_action(doc: &mut Document, action: Action) -> Option<Action> {
     match action {
         Action::NodeCreate { node, index } => {
@@ -124,117 +181,12 @@ pub fn apply_action(doc: &mut Document, action: Action) -> Option<Action> {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct Level {
-    /// Actions to apply to revert (or redo) this level, in application order.
-    pub actions: Vec<Action>,
-    pub time_ms: f64,
-    pub key: Option<CoalesceKey>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CoalesceKey {
+    pub field: String,
+    pub target: String,
 }
 
-#[derive(Default, Debug)]
-pub struct History {
-    pub undo: Vec<Level>,
-    pub redo: Vec<Level>,
-}
-
-impl History {
-    /// Apply a change (a list of actions, atomically) and record it. `key`
-    /// enables coalescing with the previous level if it has the same key and
-    /// happened recently.
-    pub fn commit(&mut self, doc: &mut Document, actions: Vec<Action>, now_ms: f64, key: Option<CoalesceKey>) {
-        let mut inverses = vec![];
-        for a in actions {
-            if let Some(inv) = apply_action(doc, a) {
-                inverses.push(inv);
-            }
-        }
-        inverses.reverse();
-        self.redo.clear();
-        if let Some(key) = &key {
-            if let Some(top) = self.undo.last_mut() {
-                if top.key.as_ref() == Some(key) && now_ms - top.time_ms < COALESCE_MS {
-                    // The top level already restores the state before both edits; drop the new
-                    // inverse and extend the window.
-                    top.time_ms = now_ms;
-                    return;
-                }
-            }
-        }
-        if inverses.is_empty() {
-            return;
-        }
-        self.undo.push(Level {
-            actions: inverses,
-            time_ms: now_ms,
-            key: key,
-        });
-    }
-
-    pub fn can_undo(&self) -> bool {
-        return !self.undo.is_empty();
-    }
-
-    pub fn can_redo(&self) -> bool {
-        return !self.redo.is_empty();
-    }
-
-    pub fn undo(&mut self, doc: &mut Document, now_ms: f64) -> bool {
-        let Some(level) = self.undo.pop() else {
-            return false;
-        };
-        let inverse = Self::apply_level(doc, level, now_ms);
-        self.redo.push(inverse);
-        return true;
-    }
-
-    pub fn redo(&mut self, doc: &mut Document, now_ms: f64) -> bool {
-        let Some(level) = self.redo.pop() else {
-            return false;
-        };
-        let inverse = Self::apply_level(doc, level, now_ms);
-        self.undo.push(inverse);
-        return true;
-    }
-
-    fn apply_level(doc: &mut Document, level: Level, now_ms: f64) -> Level {
-        let mut inverses = vec![];
-        for a in level.actions {
-            if let Some(inv) = apply_action(doc, a) {
-                inverses.push(inv);
-            }
-        }
-        inverses.reverse();
-        return Level {
-            actions: inverses,
-            time_ms: now_ms,
-            // Applied levels are never coalesced with
-            key: None,
-        };
-    }
-}
-
-/// Build the actions for deleting a node along with everything that refers to
-/// it (edges, parent references).
-pub fn delete_node_actions(doc: &Document, id: &NodeId) -> Vec<Action> {
-    let mut out = vec![];
-    for e in &doc.edges {
-        if &e.source == id || &e.dest == id {
-            out.push(Action::EdgeDelete(e.id.clone()));
-        }
-    }
-    for n in &doc.nodes {
-        if n.parents.contains(id) {
-            let mut n = n.clone();
-            n.parents.retain(|p| p != id);
-            out.push(Action::NodeModify(n));
-        }
-    }
-    out.push(Action::NodeDelete(id.clone()));
-    return out;
-}
-
-/// Build the actions for deleting a layer along with all references to it.
 pub fn delete_layer_actions(doc: &Document, id: &LayerId) -> Vec<Action> {
     let mut out = vec![];
     for n in &doc.nodes {
@@ -258,79 +210,103 @@ pub fn delete_layer_actions(doc: &Document, id: &LayerId) -> Vec<Action> {
     return out;
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn node(id: &str) -> Node {
-        return Node {
-            id: NodeId(id.to_string()),
-            text: id.to_string(),
-            layers: vec![],
-            parents: vec![],
-        };
-    }
-
-    #[test]
-    fn undo_redo_roundtrip() {
-        let mut doc = Document::default();
-        let mut h = History::default();
-        h.commit(&mut doc, vec![Action::NodeCreate {
-            node: node("a"),
-            index: None,
-        }], 0., None);
-        h.commit(&mut doc, vec![Action::NodeCreate {
-            node: node("b"),
-            index: None,
-        }], 1000., None);
-        let e = Edge {
-            id: EdgeId("e".into()),
-            text: "".into(),
-            source: NodeId("a".into()),
-            dest: NodeId("b".into()),
-            layer: None,
-        };
-        h.commit(&mut doc, vec![Action::EdgeCreate {
-            edge: e,
-            index: None,
-        }], 2000., None);
-        let full = doc.clone();
-        let actions = delete_node_actions(&doc, &NodeId("a".into()));
-        h.commit(&mut doc, actions, 3000., None);
-        assert_eq!(doc.nodes.len(), 1);
-        assert_eq!(doc.edges.len(), 0);
-        assert!(h.undo(&mut doc, 4000.));
-        assert_eq!(doc, full);
-        assert_eq!(doc.nodes[0].id.0, "a");
-        assert!(h.redo(&mut doc, 5000.));
-        assert_eq!(doc.nodes.len(), 1);
-        assert!(h.undo(&mut doc, 6000.));
-        assert!(h.undo(&mut doc, 6000.));
-        assert_eq!(doc.edges.len(), 0);
-        assert_eq!(doc.nodes.len(), 2);
-    }
-
-    #[test]
-    fn coalesce() {
-        let mut doc = Document::default();
-        let mut h = History::default();
-        h.commit(&mut doc, vec![Action::NodeCreate {
-            node: node("a"),
-            index: None,
-        }], 0., None);
-        let key = CoalesceKey {
-            target: "a".into(),
-            field: "text".into(),
-        };
-        for (i, t) in ["x", "xy", "xyz"].iter().enumerate() {
-            let mut n = doc.node(&NodeId("a".into())).unwrap().clone();
-            n.text = t.to_string();
-            h.commit(&mut doc, vec![Action::NodeModify(n)], 1000. + i as f64 * 50., Some(key.clone()));
+pub fn delete_node_actions(doc: &Document, id: &NodeId) -> Vec<Action> {
+    let mut out = vec![];
+    for e in &doc.edges {
+        if &e.source == id || &e.dest == id {
+            out.push(Action::EdgeDelete(e.id.clone()));
         }
-        assert_eq!(h.undo.len(), 2);
-        h.undo(&mut doc, 2000.);
-        assert_eq!(doc.node(&NodeId("a".into())).unwrap().text, "a");
-        h.redo(&mut doc, 2000.);
-        assert_eq!(doc.node(&NodeId("a".into())).unwrap().text, "xyz");
     }
+    for n in &doc.nodes {
+        if n.parents.contains(id) {
+            let mut n = n.clone();
+            n.parents.retain(|p| p != id);
+            out.push(Action::NodeModify(n));
+        }
+    }
+    out.push(Action::NodeDelete(id.clone()));
+    return out;
+}
+
+#[derive(Default, Debug)]
+pub struct History {
+    pub redo: Vec<Level>,
+    pub undo: Vec<Level>,
+}
+
+impl History {
+    fn apply_level(doc: &mut Document, level: Level, now_ms: f64) -> Level {
+        let mut inverses = vec![];
+        for a in level.actions {
+            if let Some(inv) = apply_action(doc, a) {
+                inverses.push(inv);
+            }
+        }
+        inverses.reverse();
+        return Level {
+            actions: inverses,
+            time_ms: now_ms,
+            key: None,
+        };
+    }
+
+    pub fn can_redo(&self) -> bool {
+        return !self.redo.is_empty();
+    }
+
+    pub fn can_undo(&self) -> bool {
+        return !self.undo.is_empty();
+    }
+
+    pub fn commit(&mut self, doc: &mut Document, actions: Vec<Action>, now_ms: f64, key: Option<CoalesceKey>) {
+        let mut inverses = vec![];
+        for a in actions {
+            if let Some(inv) = apply_action(doc, a) {
+                inverses.push(inv);
+            }
+        }
+        inverses.reverse();
+        self.redo.clear();
+        if let Some(key) = &key {
+            if let Some(top) = self.undo.last_mut() {
+                if top.key.as_ref() == Some(key) && now_ms - top.time_ms < COALESCE_MS {
+                    top.time_ms = now_ms;
+                    return;
+                }
+            }
+        }
+        if inverses.is_empty() {
+            return;
+        }
+        self.undo.push(Level {
+            actions: inverses,
+            time_ms: now_ms,
+            key: key,
+        });
+    }
+
+    pub fn redo(&mut self, doc: &mut Document, now_ms: f64) -> bool {
+        let Some(level) = self.redo.pop() else {
+            return false;
+        };
+        let inverse = Self::apply_level(doc, level, now_ms);
+        self.undo.push(inverse);
+        return true;
+    }
+
+    pub fn undo(&mut self, doc: &mut Document, now_ms: f64) -> bool {
+        let Some(level) = self.undo.pop() else {
+            return false;
+        };
+        let inverse = Self::apply_level(doc, level, now_ms);
+        self.redo.push(inverse);
+        return true;
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Level {
+    pub actions: Vec<Action>,
+    pub key: Option<CoalesceKey>,
+    pub time_ms: f64,
 }

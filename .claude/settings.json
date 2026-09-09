@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "out=$(cargo run --quiet --release --manifest-path \"$CLAUDE_PROJECT_DIR/rust-ai-lint/Cargo.toml\" -- --root \"$CLAUDE_PROJECT_DIR\" --worktree 2>&1); code=$?; if [ \"$code\" -ne 0 ]; then jq -n --arg msg \"$out\" '{systemMessage: (\"rust-ai-lint: \" + $msg)}'; fi",
+            "timeout": 120,
+            "statusMessage": "Running rust-ai-lint…"
+          }
+        ]
+      }
+    ]
+  }
+}

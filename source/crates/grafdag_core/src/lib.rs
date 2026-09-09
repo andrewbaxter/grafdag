@@ -1,6 +1,8 @@
 pub mod document;
-pub mod undo;
 pub mod layout;
+pub mod undo;
 
-pub use document::*;
-pub use undo::*;
+pub use {
+    document::*,
+    undo::*,
+};
