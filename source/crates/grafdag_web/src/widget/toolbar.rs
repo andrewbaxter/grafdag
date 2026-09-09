@@ -52,6 +52,7 @@ pub fn build_toolbar(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
         }));
     }
     let edge_buttons = vec![
+        icon_button(state, "edit_note", "Edit selected link (L)", |s, pc| s.cmd_edit_link(pc)),
         icon_button(state, "link_off", "Delete selected link (u)", |s, pc| s.cmd_unlink(pc)),
         icon_button(state, "swap_vert", "Reverse selected link (r)", |s, pc| s.cmd_reverse(pc)),
     ];
@@ -81,7 +82,10 @@ pub fn build_toolbar(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
     items.push(icon_button(state, "zoom_in", "Zoom in (+)", |s, pc| s.cmd_zoom(pc, 1.2, None)));
     items.push(icon_button(state, "zoom_out", "Zoom out (-)", |s, pc| s.cmd_zoom(pc, 1. / 1.2, None)));
     items.push(icon_button(state, "fit_screen", "Fit to view (0)", |s, pc| s.cmd_fit(pc)));
-    items.push(icon_button(state, "rotate_right", "Rotate layout direction", |s, pc| s.cmd_rotate_flow(pc)));
+    items.push(
+        icon_button(state, "rotate_left", "Rotate layout counterclockwise", |s, pc| s.cmd_rotate_flow(pc, false)),
+    );
+    items.push(icon_button(state, "rotate_right", "Rotate layout clockwise", |s, pc| s.cmd_rotate_flow(pc, true)));
     items.push(zoom);
     items.push(separator());
     items.push(icon_button(state, "add", "New unlinked node (N)", |s, pc| s.cmd_new_island(pc)));

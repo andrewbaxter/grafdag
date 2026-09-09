@@ -177,6 +177,49 @@ fn renders_and_measures() {
     assert!(a.offset_height() < 40, "{}", a.offset_height());
 }
 
+/// A container's title is wrapped to its box, centered in the strip above the
+/// children, whichever way the graph flows.
+#[wasm_bindgen_test]
+fn container_title_fills_box() {
+    use grafdag_core::layout::Flow;
+
+    let doc = Document {
+        layers: vec![],
+        selected_layer: None,
+        flow: Default::default(),
+        nodes: vec![
+            node("g", "EKS cluster: api-staging", &[], &[]),
+            node("a", "Ingress: staging.api.example.com", &["g"], &[]),
+            node("b", "Deployment: api (1 replica)", &["g"], &[]),
+            node("c", "ConfigMap: api-config", &["g"], &[]),
+        ],
+        edges: vec![edge("e1", "a", "b"), edge("e2", "a", "c")],
+    };
+    let h = setup(doc);
+    for flow in Flow::ALL {
+        let state = h.widget.state();
+        while state.doc.borrow().flow != flow {
+            state.eg.event(|pc| state.cmd_rotate_flow(pc, true));
+        }
+        let layout = h.widget.state().layout.borrow().clone();
+        let g = layout.primary(&NodeId("g".into())).unwrap();
+        let inner = node_el("g").first_element_child().unwrap();
+        let title = inner.first_element_child().unwrap().dyn_into::<HtmlElement>().unwrap();
+        // The title spans the box (minus padding) and is centered in it
+        let width = title.offset_width() as f64;
+        assert!(width > g.rect.w - 60., "{:?}: title {} narrow for box {:?}", flow, width, g.rect);
+        let left = title.get_bounding_client_rect().left() - inner.get_bounding_client_rect().left();
+        assert!((left - (g.rect.w - width) / 2.).abs() < 2., "{:?}: title not centered ({} of {:?})", flow, left, g.rect);
+        // ... and fits in the strip the layout kept above the children
+        let height = title.offset_height() as f64;
+        assert!(height <= g.title_height + 0.5, "{:?}: title {} taller than strip {}", flow, height, g.title_height);
+        for child in ["a", "b", "c"] {
+            let r = layout.primary(&NodeId(child.into())).unwrap().rect;
+            assert!(r.y >= g.rect.y + g.title_height - 0.5, "{:?}: {} {:?} in the title of {:?}", flow, child, r, g.rect);
+        }
+    }
+}
+
 #[wasm_bindgen_test]
 fn keyboard_navigation() {
     let h = setup(sample_doc());
@@ -899,7 +942,11 @@ async fn layer_fade_animates_selection_does_not() {
 #[wasm_bindgen_test]
 fn rotated_flow() {
     let h = setup(sample_doc());
-    let rotate = document().query_selector(".gd_button[title^=\"Rotate layout\"]").unwrap().expect("rotate button");
+    let rotate =
+        document()
+            .query_selector(".gd_button[title=\"Rotate layout counterclockwise\"]")
+            .unwrap()
+            .expect("rotate button");
     rotate.dispatch_event(&MouseEvent::new("click").unwrap()).unwrap();
     assert_eq!(h.widget.state().doc.borrow().flow, grafdag_core::layout::Flow::Right);
     let layout = h.widget.state().layout.borrow().clone();
@@ -938,6 +985,45 @@ fn rotated_flow() {
     key("z", false);
     assert_eq!(h.widget.state().doc.borrow().flow, grafdag_core::layout::Flow::Down);
     assert_eq!(h.widget.state().layout.borrow().flow, grafdag_core::layout::Flow::Down);
+}
+
+/// The two rotate buttons turn the flow opposite ways, and the edit link
+/// button is enabled only with a link selected.
+#[wasm_bindgen_test]
+fn toolbar_rotate_and_edit_link() {
+    use grafdag_core::layout::Flow;
+
+    let h = setup(sample_doc());
+    let button = |title: &str| {
+        document()
+            .query_selector(&format!(".gd_button[title=\"{}\"]", title))
+            .unwrap()
+            .expect(title)
+            .dyn_into::<HtmlElement>()
+            .unwrap()
+    };
+    let cw = button("Rotate layout clockwise");
+    let ccw = button("Rotate layout counterclockwise");
+    cw.click();
+    assert_eq!(h.widget.state().doc.borrow().flow, Flow::Left);
+    ccw.click();
+    assert_eq!(h.widget.state().doc.borrow().flow, Flow::Down);
+    ccw.click();
+    assert_eq!(h.widget.state().doc.borrow().flow, Flow::Right);
+    cw.click();
+    assert_eq!(h.widget.state().doc.borrow().flow, Flow::Down);
+    // Nothing selected, so there's no link to edit
+    let edit_link = button("Edit selected link (L)");
+    assert!(edit_link.class_name().contains("gd_button_disabled"));
+    edit_link.click();
+    assert_eq!(h.widget.state().mode.get(), Mode::Layers);
+    // Selecting a link enables it
+    mouse(&node_el("a"), 0);
+    key("ArrowDown", false);
+    let edge = h.widget.state().sel_edge.get().unwrap();
+    assert!(!edit_link.class_name().contains("gd_button_disabled"));
+    edit_link.click();
+    assert_eq!(h.widget.state().mode.get(), Mode::EditEdge(edge));
 }
 
 /// Repeated Up with a backward-pointing selection walks up the graph

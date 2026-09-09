@@ -84,9 +84,16 @@ pub enum Mode {
 #[derive(Clone, Debug)]
 pub struct Measured {
     pub text: String,
+    /// Whether the text was measured as a container title (they're bolder).
+    pub container: bool,
     pub size: NodeSize,
     /// The wrapping width chosen for the text (for hysteresis).
     pub text_width: Option<f64>,
+    /// Horizontal padding and border of the node box around the text.
+    pub chrome: f64,
+    /// Wrapping width for a container title spanning its box, and the box
+    /// height that produced (see `fit_container_titles`).
+    pub fit: Option<(f64, f64)>,
 }
 
 /// Overlay buttons drawn next to the focused node on the canvas.

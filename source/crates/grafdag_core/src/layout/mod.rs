@@ -144,12 +144,19 @@ pub(crate) enum TitleAt {
 }
 
 impl Flow {
+    /// All flows, in counterclockwise order on screen.
     pub const ALL: [Flow; 4] = [Flow::Down, Flow::Right, Flow::Up, Flow::Left];
 
-    /// The next flow when cycling through them.
-    pub fn next(self) -> Flow {
+    /// The flow a quarter turn counterclockwise on screen.
+    pub fn ccw(self) -> Flow {
         let i = Flow::ALL.iter().position(|f| *f == self).unwrap();
         return Flow::ALL[(i + 1) % Flow::ALL.len()];
+    }
+
+    /// The flow a quarter turn clockwise on screen.
+    pub fn cw(self) -> Flow {
+        let i = Flow::ALL.iter().position(|f| *f == self).unwrap();
+        return Flow::ALL[(i + Flow::ALL.len() - 1) % Flow::ALL.len()];
     }
 
     /// The rank axis is the screen x axis.
@@ -482,6 +489,10 @@ pub(crate) struct ContainerResult {
     /// Full box size (including title and padding for container nodes).
     pub size: NodeSize,
     pub title_height: f64,
+    /// How far the contents (members, ports, paths) sit inside the box along
+    /// the side axis. Non-zero when the enclosing layout widened the box to
+    /// fit the node's edge ports, which centers the contents in it.
+    pub inset: f64,
     /// Member rects in local coordinates (relative to the container box).
     pub members: Vec<(usize, Rect, NavInfo)>,
     /// Border ports for edges crossing this container, relative to the box.
@@ -519,9 +530,18 @@ impl<'a> Ctx<'a> {
 }
 
 /// Lay out the visible part of the document. `sizes` gives the text box size
-/// for every visible node (missing nodes get a default size). `previous` is
-/// used to keep the ordering stable across edits.
-pub fn layout(doc: &Document, sizes: &HashMap<NodeId, NodeSize>, config: &LayoutConfig, previous: Option<&Layout>) -> Layout {
+/// for every visible node (missing nodes get a default size). `titles`
+/// overrides that for nodes drawn as containers, whose title is wrapped to the
+/// container box rather than to its own aspect ratio; ghost copies of a
+/// container (drawn as plain boxes) still use `sizes`. `previous` is used to
+/// keep the ordering stable across edits.
+pub fn layout(
+    doc: &Document,
+    sizes: &HashMap<NodeId, NodeSize>,
+    titles: &HashMap<NodeId, NodeSize>,
+    config: &LayoutConfig,
+    previous: Option<&Layout>,
+) -> Layout {
     let flow = config.flow;
     let default_size = flow.canonical_size(NodeSize {
         width: 60.,
@@ -557,10 +577,18 @@ pub fn layout(doc: &Document, sizes: &HashMap<NodeId, NodeSize>, config: &Layout
     }
 
     // Placements: primary first (so indices are stable), then ghosts
+    let container_nodes: HashSet<&NodeId> = primary_parent.values().flatten().collect();
     let mut placements = vec![];
     let mut primary_index: HashMap<NodeId, usize> = HashMap::new();
     for id in &visible {
-        let size = sizes.get(*id).map(|s| flow.canonical_size(*s)).unwrap_or(default_size);
+        let size =
+            container_nodes
+                .contains(*id)
+                .then(|| titles.get(*id))
+                .flatten()
+                .or_else(|| sizes.get(*id))
+                .map(|s| flow.canonical_size(*s))
+                .unwrap_or(default_size);
         primary_index.insert((*id).clone(), placements.len());
         placements.push(Placement {
             id: PlacementId {
@@ -902,8 +930,10 @@ fn assemble(ctx: Ctx) -> Layout {
         }
         let mut children = vec![];
         for (m, rect, _) in &res.members {
-            if ctx.results.contains_key(&Some(*m)) {
-                origins.insert(Some(*m), pt(origin.x + rect.x, origin.y + rect.y));
+            if let Some(child) = ctx.results.get(&Some(*m)) {
+                // The box may be wider than the contents (ports); they're
+                // centered in it
+                origins.insert(Some(*m), pt(origin.x + rect.x + child.inset, origin.y + rect.y));
                 children.push((Some(*m), depth + 1));
             }
         }

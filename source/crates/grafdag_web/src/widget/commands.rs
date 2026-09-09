@@ -248,10 +248,15 @@ impl State {
         }
     }
 
-    /// Rotate the layout's flow direction (down, right, up, left).
-    pub fn cmd_rotate_flow(&self, pc: &mut ProcessingContext) {
+    /// Turn the layout's flow direction a quarter turn on screen.
+    pub fn cmd_rotate_flow(&self, pc: &mut ProcessingContext, cw: bool) {
         self.follow.set(true);
-        let next = self.doc.borrow().flow.next();
+        let flow = self.doc.borrow().flow;
+        let next = if cw {
+            flow.cw()
+        } else {
+            flow.ccw()
+        };
         self.commit(pc, vec![Action::SetFlow(next)], None);
     }
 

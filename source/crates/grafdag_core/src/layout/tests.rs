@@ -33,6 +33,10 @@ fn sizes(doc: &Document) -> HashMap<NodeId, NodeSize> {
     })).collect();
 }
 
+fn no_titles() -> HashMap<NodeId, NodeSize> {
+    return HashMap::new();
+}
+
 fn overlaps(a: &Rect, b: &Rect) -> bool {
     return a.x < b.right() - 0.01 && b.x < a.right() - 0.01 && a.y < b.bottom() - 0.01 && b.y < a.bottom() - 0.01;
 }
@@ -66,7 +70,7 @@ fn simple_chain() {
         nodes: vec![node("a", &[], &[]), node("b", &[], &[]), node("c", &[], &[])],
         edges: vec![edge("e1", "a", "b"), edge("e2", "b", "c"), edge("e3", "a", "c")],
     };
-    let l = layout(&doc, &sizes(&doc), &LayoutConfig::default(), None);
+    let l = layout(&doc, &sizes(&doc), &no_titles(), &LayoutConfig::default(), None);
     assert_eq!(l.nodes.len(), 3);
     assert_eq!(l.edges.len(), 3);
     let a = l.primary(&NodeId("a".into())).unwrap();
@@ -91,7 +95,7 @@ fn islands_and_cycle() {
         nodes: vec![node("a", &[], &[]), node("b", &[], &[]), node("c", &[], &[]), node("x", &[], &[]), node("y", &[], &[])],
         edges: vec![edge("e1", "a", "b"), edge("e2", "b", "c"), edge("e3", "c", "a"), edge("e4", "x", "y")],
     };
-    let l = layout(&doc, &sizes(&doc), &LayoutConfig::default(), None);
+    let l = layout(&doc, &sizes(&doc), &no_titles(), &LayoutConfig::default(), None);
     assert_eq!(l.islands.len(), 2);
     check_no_sibling_overlap(&l);
     check_orthogonal(&l);
@@ -132,7 +136,7 @@ fn nested_containers() {
             edge("e8", "a", "a"),
         ],
     };
-    let l = layout(&doc, &sizes(&doc), &LayoutConfig::default(), None);
+    let l = layout(&doc, &sizes(&doc), &no_titles(), &LayoutConfig::default(), None);
     check_no_sibling_overlap(&l);
     check_orthogonal(&l);
     let g = l.primary(&NodeId("g".into())).unwrap();
@@ -176,7 +180,7 @@ fn ghosts_and_hidden_layers() {
         ],
         edges: vec![edge("e1", "a", "p"), edge("e2", "hidden", "a")],
     };
-    let l = layout(&doc, &sizes(&doc), &LayoutConfig::default(), None);
+    let l = layout(&doc, &sizes(&doc), &no_titles(), &LayoutConfig::default(), None);
     assert!(l.primary(&NodeId("hidden".into())).is_none());
     let a_placements: Vec<&PlacedNode> = l.nodes.iter().filter(|n| n.id.node.0 == "a").collect();
     assert_eq!(a_placements.len(), 2);
@@ -206,11 +210,11 @@ fn wide_graph_no_overlap() {
         nodes: nodes,
         edges: edges,
     };
-    let l = layout(&doc, &sizes(&doc), &LayoutConfig::default(), None);
+    let l = layout(&doc, &sizes(&doc), &no_titles(), &LayoutConfig::default(), None);
     check_no_sibling_overlap(&l);
     check_orthogonal(&l);
     // Stable relayout
-    let l2 = layout(&doc, &sizes(&doc), &LayoutConfig::default(), Some(&l));
+    let l2 = layout(&doc, &sizes(&doc), &no_titles(), &LayoutConfig::default(), Some(&l));
     for n in &l.nodes {
         let n2 = l2.node(&n.id).unwrap();
         assert_eq!(n.nav, n2.nav);
@@ -239,7 +243,7 @@ fn wide_ranks_are_split() {
     };
     let mut config = LayoutConfig::default();
     config.max_rank_width = Some(300.);
-    let l = layout(&doc, &sizes(&doc), &config, None);
+    let l = layout(&doc, &sizes(&doc), &no_titles(), &config, None);
     check_no_sibling_overlap(&l);
     check_orthogonal(&l);
     // Unsplit this would be ~850 wide; edges passing through split ranks add some width
@@ -259,8 +263,8 @@ fn wide_ranks_are_split() {
     assert_eq!(l.edges.len(), 12);
     // Relayout is stable once there's a previous layout to follow (the first
     // relayout may re-chunk the split ranks by the positions it now knows)
-    let l2 = layout(&doc, &sizes(&doc), &config, Some(&l));
-    let l3 = layout(&doc, &sizes(&doc), &config, Some(&l2));
+    let l2 = layout(&doc, &sizes(&doc), &no_titles(), &config, Some(&l));
+    let l3 = layout(&doc, &sizes(&doc), &no_titles(), &config, Some(&l2));
     for n in &l2.nodes {
         assert_eq!(n.nav, l3.node(&n.id).unwrap().nav);
     }
@@ -277,7 +281,7 @@ fn narrow_ranks_not_split() {
     };
     let mut config = LayoutConfig::default();
     config.max_rank_width = Some(720.);
-    let l = layout(&doc, &sizes(&doc), &config, None);
+    let l = layout(&doc, &sizes(&doc), &no_titles(), &config, None);
     assert_eq!(l.islands[0].ranks.len(), 3, "{:?}", l.islands[0].ranks);
 }
 
@@ -292,7 +296,7 @@ fn ports_follow_drawn_order() {
         nodes: vec![node("p", &[], &[]), node("b", &[], &[]), node("c1", &[], &[]), node("c2", &[], &[])],
         edges: vec![edge("in", "p", "b"), edge("x", "b", "c1"), edge("y1", "b", "c2"), edge("y2", "b", "c2")],
     };
-    let l = layout(&doc, &sizes(&doc), &LayoutConfig::default(), None);
+    let l = layout(&doc, &sizes(&doc), &no_titles(), &LayoutConfig::default(), None);
     let b = l.primary(&NodeId("b".into())).unwrap().clone();
     let port = |e: &str| l.port(&EdgeId(e.into()), &b.id).unwrap();
     assert_eq!(port("in").side, Side::Before);
@@ -340,7 +344,7 @@ fn all_flows() {
     for flow in Flow::ALL {
         let mut config = LayoutConfig::default();
         config.flow = flow;
-        let l = layout(&doc, &sizes(&doc), &config, previous.as_ref());
+        let l = layout(&doc, &sizes(&doc), &no_titles(), &config, previous.as_ref());
         assert_eq!(l.flow, flow);
         check_no_sibling_overlap(&l);
         check_orthogonal(&l);
@@ -421,6 +425,113 @@ fn all_flows() {
         let vertical = |d: ScreenDir| matches!(d, ScreenDir::Up | ScreenDir::Down);
         assert_ne!(vertical(f), vertical(n), "{:?}: axes must be perpendicular", flow);
     }
-    assert_eq!(Flow::Down.next(), Flow::Right);
-    assert_eq!(Flow::Left.next(), Flow::Down);
+    assert_eq!(Flow::Down.ccw(), Flow::Right);
+    assert_eq!(Flow::Left.ccw(), Flow::Down);
+    assert_eq!(Flow::Down.cw(), Flow::Left);
+    assert_eq!(Flow::Right.cw(), Flow::Down);
+}
+
+/// The title strip has to hold the title text as it's drawn (horizontally, at
+/// the top of the box, spanning its width) whichever way the graph flows.
+#[test]
+fn title_strip_fits_text() {
+    let doc = Document {
+        layers: vec![],
+        selected_layer: None,
+        flow: Default::default(),
+        nodes: vec![node("g", &[], &[]), node("a", &["g"], &[]), node("x", &[], &[])],
+        edges: vec![edge("e1", "x", "a")],
+    };
+    // A wide title over a small child
+    let title = NodeSize {
+        width: 200.,
+        height: 20.,
+    };
+    let mut sizes = sizes(&doc);
+    sizes.insert(NodeId("g".into()), title);
+    sizes.insert(NodeId("a".into()), NodeSize {
+        width: 20.,
+        height: 20.,
+    });
+    for flow in Flow::ALL {
+        let mut config = LayoutConfig::default();
+        config.flow = flow;
+        let l = layout(&doc, &sizes, &no_titles(), &config, None);
+        let g = l.primary(&NodeId("g".into())).unwrap();
+        assert!(g.rect.w >= title.width - 0.01, "{:?}: title {:?} wider than box {:?}", flow, title, g.rect);
+        assert!(g.title_height >= title.height - 0.01, "{:?}: title strip {} thinner than {:?}", flow, g.title_height, title);
+        // The strip is only as thick as it needs to be
+        assert!(g.title_height <= title.height + 0.01, "{:?}: title strip {} too thick", flow, g.title_height);
+        let a = l.primary(&NodeId("a".into())).unwrap();
+        assert!(a.rect.y >= g.rect.y + g.title_height - 0.01, "{:?}: child {:?} in title of {:?}", flow, a.rect, g.rect);
+        // A title wrapped to the container box (as the widget re-measures it)
+        // takes the place of the node's own text box
+        let wide = NodeSize {
+            width: 400.,
+            height: 18.,
+        };
+        let l = layout(&doc, &sizes, &[(NodeId("g".into()), wide)].into_iter().collect(), &config, None);
+        let g = l.primary(&NodeId("g".into())).unwrap();
+        assert!(g.rect.w >= wide.width - 0.01, "{:?}: box {:?} narrower than title {:?}", flow, g.rect, wide);
+        assert!((g.title_height - wide.height).abs() < 0.01, "{:?}: strip {} for title {:?}", flow, g.title_height, wide);
+    }
+}
+
+/// A container drawn a second time under another parent is a plain box: it
+/// gets the node's own text size, not the title wrapped to the container box.
+#[test]
+fn ghost_of_container_uses_text_size() {
+    let doc = Document {
+        layers: vec![],
+        selected_layer: None,
+        flow: Default::default(),
+        nodes: vec![node("p", &[], &[]), node("q", &[], &[]), node("g", &["p", "q"], &[]), node("a", &["g"], &[])],
+        edges: vec![edge("e1", "p", "q")],
+    };
+    let titles = [(NodeId("g".into()), NodeSize {
+        width: 400.,
+        height: 18.,
+    })].into_iter().collect();
+    let l = layout(&doc, &sizes(&doc), &titles, &LayoutConfig::default(), None);
+    let g = l.primary(&NodeId("g".into())).unwrap();
+    assert!(g.container && g.rect.w >= 400., "{:?}", g.rect);
+    let ghost = l.nodes.iter().find(|n| n.id.node.0 == "g" && n.ghost).expect("ghost");
+    assert!(!ghost.container);
+    assert!(ghost.rect.w < 100., "ghost {:?} sized like the container", ghost.rect);
+}
+
+/// A node's box is pinned by its edge ports as well as its text and children;
+/// a container widened that way centers its contents.
+#[test]
+fn ports_widen_container() {
+    let mut nodes = vec![node("g", &[], &[]), node("a", &["g"], &[])];
+    let mut edges = vec![];
+    let n = 10;
+    for i in 0 .. n {
+        nodes.push(node(&format!("s{}", i), &[], &[]));
+        edges.push(edge(&format!("e{}", i), &format!("s{}", i), "a"));
+    }
+    let doc = Document {
+        layers: vec![],
+        selected_layer: None,
+        flow: Default::default(),
+        nodes: nodes,
+        edges: edges,
+    };
+    let config = LayoutConfig::default();
+    let l = layout(&doc, &sizes(&doc), &no_titles(), &config, None);
+    check_no_sibling_overlap(&l);
+    check_orthogonal(&l);
+    let g = l.primary(&NodeId("g".into())).unwrap();
+    let a = l.primary(&NodeId("a".into())).unwrap();
+    let min_w = 2. * config.port_margin + (n as f64 - 1.) * config.port_gap;
+    assert!(g.rect.w >= min_w - 0.01, "box {:?} too narrow for {} ports (want {})", g.rect, n, min_w);
+    // Contents centered in the widened box
+    assert!((a.rect.cx() - g.rect.cx()).abs() < 0.01, "child {:?} not centered in {:?}", a.rect, g.rect);
+    // Every edge crosses g's top border (its port) inside the box
+    for e in &l.edges {
+        let cross = e.points.windows(2).find(|w| w[0].y <= g.rect.y + 0.01 && w[1].y >= g.rect.y - 0.01).unwrap_or_else(|| panic!("{:?} doesn't enter g {:?}: {:?}", e.id, g.rect, e.points));
+        assert!((cross[0].x - cross[1].x).abs() < 0.01, "{:?} crosses g's border sideways: {:?}", e.id, cross);
+        assert!(cross[0].x >= g.rect.x - 0.01 && cross[0].x <= g.rect.right() + 0.01, "{:?} enters g outside its box: {:?} {:?}", e.id, cross, g.rect);
+    }
 }

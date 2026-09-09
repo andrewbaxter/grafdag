@@ -278,8 +278,12 @@ html, body {
     background: var(--gd-container-bg);
 }
 
+/* The title fills the container's box (the widget sets its width) and is
+ * centered in the strip above the children. */
 .gd_node_container > .gd_node > .gd_node_text {
     font-weight: 600;
+    margin-inline: auto;
+    text-align: center;
 }
 
 /* A container's interior is drawn over the links inside it, so it's made

@@ -286,7 +286,7 @@ fn is_secondary(doc: &grafdag_core::Document, layers: &[grafdag_core::LayerId]) 
 /// Measure the node's text box, choosing a wrapping width to keep the aspect
 /// ratio between 1:2 and 2:1. Downsizing is deferred until the box is 50%
 /// mis-sized (hysteresis) so small edits don't reflow everything.
-fn measure(wrap_el: &El, previous: Option<&Measured>) -> (NodeSize, Option<f64>) {
+fn measure(wrap_el: &El, previous: Option<&Measured>) -> (NodeSize, Option<f64>, f64) {
     let node_el = &node_inner_el(wrap_el).unwrap();
     let text_el = node_text_el(wrap_el).unwrap();
     remove_style(wrap_el, "width");
@@ -337,7 +337,83 @@ fn measure(wrap_el: &El, previous: Option<&Measured>) -> (NodeSize, Option<f64>)
         }
     }
     remove_style(node_el, "width");
-    return (size, chosen);
+    return (size, chosen, chrome);
+}
+
+/// Read an element's inline style property.
+fn get_style(e: &El, prop: &str) -> String {
+    let raw = e.raw();
+    let Some(h) = raw.dyn_ref::<HtmlElement>() else {
+        return String::new();
+    };
+    return h.style().get_property_value(prop).unwrap_or_default();
+}
+
+fn restore_style(e: &El, prop: &str, value: &str) {
+    if value.is_empty() {
+        remove_style(e, prop);
+    } else {
+        set_style(e, prop, value);
+    }
+}
+
+/// Re-wrap each container title across the full width of its box (they're
+/// drawn centered in the title strip) and measure how tall that makes it, so
+/// the strip the layout reserves matches the title as drawn. The box's width
+/// still comes from the title's own (tightly wrapped) width and the children,
+/// so a container can shrink again when its contents do.
+///
+/// Returns the title sizes to lay out again with, if any title changed shape.
+fn fit_container_titles(state: &Rc<State>, layout: &Layout, sizes: &HashMap<NodeId, NodeSize>, pad: f64) -> Option<HashMap<NodeId, NodeSize>> {
+    let render = state.render.borrow();
+    let mut measured = state.measured.borrow_mut();
+    let mut out: HashMap<NodeId, NodeSize> = HashMap::new();
+    let mut changed = false;
+    for n in &layout.nodes {
+        if !n.container || n.ghost {
+            continue;
+        }
+        let Some(v) = render.nodes.get(&n.id) else {
+            continue;
+        };
+        let Some(m) = measured.get(&n.id.node).cloned() else {
+            continue;
+        };
+        let width = (n.rect.w - 2. * pad - m.chrome).max(1.);
+        let height = match m.fit {
+            Some((w, h)) if (w - width).abs() < 0.5 => h,
+            _ => {
+                let wrap_el = &v.el;
+                let node_el = &node_inner_el(wrap_el).unwrap();
+                let text_el = node_text_el(wrap_el).unwrap();
+                let (old_w, old_h) = (get_style(wrap_el, "width"), get_style(wrap_el, "height"));
+                remove_style(wrap_el, "width");
+                remove_style(wrap_el, "height");
+                set_style(node_el, "width", "max-content");
+                set_style(&text_el, "width", &px(width));
+                let (_, h) = offset_size(node_el);
+                remove_style(node_el, "width");
+                restore_style(wrap_el, "width", &old_w);
+                restore_style(wrap_el, "height", &old_h);
+                h
+            },
+        };
+        measured.get_mut(&n.id.node).unwrap().fit = Some((width, height));
+        let Some(size) = sizes.get(&n.id.node) else {
+            continue;
+        };
+        if (size.height - height).abs() > 0.5 {
+            changed = true;
+        }
+        out.insert(n.id.node.clone(), NodeSize {
+            width: size.width,
+            height: height,
+        });
+    }
+    if !changed {
+        return None;
+    }
+    return Some(out);
 }
 
 // Node elements
@@ -483,9 +559,14 @@ fn sync_nodes(pc: &mut ProcessingContext, state: &Rc<State>, nodes_el: &El) -> H
             v.el.ref_replace(vec![]);
         }
     }
+    // Nodes that something else is drawn inside: their text is the container
+    // title, which is styled differently and so measured differently
+    let containers: HashSet<NodeId> = wanted.iter().filter_map(|id| id.container.clone()).collect();
+    let mut ghosts: HashSet<PlacementId> = HashSet::new();
     let mut sizes = HashMap::new();
     for id in &wanted {
         let node = doc.node(&id.node).unwrap();
+        let is_container = containers.contains(&id.node);
         let is_new = !render.nodes.contains_key(id);
         if is_new {
             let v = make_node_view(pc, state, id);
@@ -493,7 +574,9 @@ fn sync_nodes(pc: &mut ProcessingContext, state: &Rc<State>, nodes_el: &El) -> H
             render.nodes.insert(id.clone(), v);
         }
         let e = &render.nodes[id].el;
-        let text_changed = measured.get(&id.node).map(|m| m.text != node.text).unwrap_or(true);
+        e.ref_modify_classes(&[("gd_node_container", is_container)]);
+        let text_changed =
+            measured.get(&id.node).map(|m| m.text != node.text || m.container != is_container).unwrap_or(true);
         if is_new || text_changed {
             let display = if node.text.is_empty() {
                 "\u{00a0}"
@@ -507,25 +590,32 @@ fn sync_nodes(pc: &mut ProcessingContext, state: &Rc<State>, nodes_el: &El) -> H
             // Only cache measurements taken while attached to the document
             if text_changed && e.raw().is_connected() {
                 let prev = measured.get(&id.node).cloned();
-                let (size, width) = measure(e, prev.as_ref());
+                let (size, width, chrome) = measure(e, prev.as_ref());
                 measured.insert(id.node.clone(), Measured {
                     text: node.text.clone(),
+                    container: is_container,
                     size: size,
                     text_width: width,
+                    chrome: chrome,
+                    fit: None,
                 });
             }
             if let Some(m) = measured.get(&id.node) {
                 sizes.insert(id.node.clone(), m.size);
             }
         }
+        if ghost {
+            ghosts.insert(id.clone());
+        }
         e.ref_modify_classes(&[("gd_node_ghost", ghost)]);
     }
-    // Ghosts use the primary's text width
+    // Ghosts use the primary's text width; a container title spans its box
     for id in &wanted {
         let e = &render.nodes[id].el;
         if let Some(m) = measured.get(&id.node) {
             let text_el = node_text_el(e).unwrap();
-            match m.text_width {
+            let fit = m.fit.filter(|_| !ghosts.contains(id)).map(|(w, _)| w);
+            match fit.or(m.text_width) {
                 Some(w) => set_style(&text_el, "width", &px(w)),
                 None => remove_style(&text_el, "width"),
             }
@@ -926,7 +1016,7 @@ pub fn build_canvas(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
         let state = state.upgrade()?;
         let sizes = sync_nodes(pc, &state, nodes);
         let previous = layout.borrow().clone();
-        let new_layout = {
+        let config = {
             let doc = state.doc.borrow();
             let mut config = LayoutConfig::default();
             config.flow = doc.flow;
@@ -937,8 +1027,18 @@ pub fn build_canvas(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
                 width.get()
             };
             config.max_rank_width = Some((side_extent as f64 - 2. * VIEW_MARGIN).max(200.));
-            grafdag_core::layout::layout(&doc, &sizes, &config, Some(&previous))
+            config
         };
+        let run = |titles: &HashMap<NodeId, NodeSize>| {
+            let doc = state.doc.borrow();
+            return grafdag_core::layout::layout(&doc, &sizes, titles, &config, Some(&previous));
+        };
+        let mut new_layout = run(&HashMap::new());
+        // Container titles are wrapped to their box, which isn't known until
+        // it's been laid out once
+        if let Some(titles) = fit_container_titles(&state, &new_layout, &sizes, config.container_pad) {
+            new_layout = run(&titles);
+        }
         layout.set(pc, Rc::new(new_layout));
     }));
 

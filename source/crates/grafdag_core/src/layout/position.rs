@@ -89,21 +89,33 @@ pub(crate) fn position_container(
         *port_counts.entry((*m, Side::Before)).or_default() += 1;
         *port_counts.entry((*m, Side::After)).or_default() += 1;
     }
+    // Node sizes: the text box (or, for a container, the box its own layout
+    // came to) widened to fit the edge ports on its busiest side. A widened
+    // container centers its contents in the box (`inset`).
     let mut sizes: HashMap<usize, NodeSize> = HashMap::new();
+    let mut insets: Vec<(usize, f64)> = vec![];
     for m in members {
-        let size = if let Some(res) = ctx.results.get(&Some(*m)) {
-            res.size
-        } else {
-            let mut s = ctx.placements[*m].size;
-            let ports =
-                port_counts.get(&(*m, Side::Before)).cloned().unwrap_or(0).max(port_counts.get(&(*m, Side::After)).cloned().unwrap_or(0));
-            if ports > 0 {
-                let min_w = 2. * config.port_margin + (ports as f64 - 1.) * config.port_gap;
-                s.width = s.width.max(min_w);
-            }
-            s
+        let mut size = match ctx.results.get(&Some(*m)) {
+            Some(res) => res.size,
+            None => ctx.placements[*m].size,
         };
+        let ports =
+            port_counts.get(&(*m, Side::Before)).cloned().unwrap_or(0).max(port_counts.get(&(*m, Side::After)).cloned().unwrap_or(0));
+        if ports > 0 {
+            let min_w = 2. * config.port_margin + (ports as f64 - 1.) * config.port_gap;
+            if min_w > size.width {
+                if ctx.results.contains_key(&Some(*m)) {
+                    insets.push((*m, (min_w - size.width) / 2.));
+                }
+                size.width = min_w;
+            }
+        }
         sizes.insert(*m, size);
+    }
+    for (m, inset) in insets {
+        let res = ctx.results.get_mut(&Some(m)).unwrap();
+        res.inset = inset;
+        res.size.width = sizes[&m].width;
     }
 
     // Lay out each island
@@ -255,7 +267,9 @@ pub(crate) fn position_container(
             height: content_h,
         }, 0.),
         Some(c) => {
-            // Title text box on screen
+            // Title text box, back in screen terms (placements hold canonical
+            // sizes): the title is always drawn horizontally across the top of
+            // the box, and the strip is as thick as the text is tall.
             let text = config.flow.canonical_size(ctx.placements[c].size);
             let pad = config.container_pad;
             match config.flow.title_at() {
@@ -274,6 +288,9 @@ pub(crate) fn position_container(
                     }, text.height)
                 },
                 TitleAt::SideStart => {
+                    // The strip is a band at the start of the side axis (the
+                    // top of the box on screen): as thick as the text's screen
+                    // height, and long enough for its screen width.
                     let inner_h = content_h.max(text.width);
                     (pt(text.height + config.title_gap, pad + (inner_h - content_h) / 2.), NodeSize {
                         width: text.height + config.title_gap + content_w + pad,
@@ -297,6 +314,7 @@ pub(crate) fn position_container(
     let mut result = ContainerResult {
         size: size,
         title_height: title_height,
+        inset: 0.,
         members: vec![],
         exit_ports: HashMap::new(),
         islands: vec![],
@@ -591,16 +609,16 @@ fn assign_ports(ctx: &Ctx, l: &mut Layered) {
         let node = l.nodes[ni].clone();
         match node.kind {
             LKind::Real(m) => {
-                let fixed = ctx.results.get(&Some(m)).map(|r| r.exit_ports.clone());
+                let fixed = ctx.results.get(&Some(m)).map(|r| (r.exit_ports.clone(), r.inset));
                 for (down, edges) in [(true, node.down.clone()), (false, node.up.clone())] {
                     if edges.is_empty() {
                         continue;
                     }
                     let left = node.x - node.w / 2.;
-                    if let Some(fixed) = &fixed {
+                    if let Some((fixed, inset)) = &fixed {
                         for e in &edges {
                             let inst = l.edges[*e].inst;
-                            let x = fixed.get(&inst).map(|(_, x)| left + x).unwrap_or(node.x);
+                            let x = fixed.get(&inst).map(|(_, x)| left + inset + x).unwrap_or(node.x);
                             if down {
                                 l.edges[*e].x_upper = x;
                             } else {
