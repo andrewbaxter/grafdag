@@ -5,6 +5,13 @@ edition.workspace = true
 license.workspace = true
 description = "Document model, undo history and layout engine for grafdag"
 
+[features]
+# Enables schemask schema generation for the document types (see the `grafdag`
+# crate's build script, which writes `schemask.json`).
+schemask = ["dep:schemask_core", "dep:schemask_derive"]
+
 [dependencies]
+schemask_core = { version = "0.1.5", optional = true }
+schemask_derive = { version = "0.1.5", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

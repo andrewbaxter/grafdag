@@ -82,6 +82,7 @@ pub(crate) struct ExitInfo {
     pub to_self: bool,
 }
 
+#[cfg_attr(feature = "schemask", derive(schemask_derive::Maskoidy))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum Flow {
     #[default]

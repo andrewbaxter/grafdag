@@ -2,7 +2,6 @@ use {
     grafdag_core::{
         Action,
         CoalesceKey,
-        DefaultTrue,
         Layer,
         LayerId,
         NodeId,
@@ -76,7 +75,7 @@ pub fn build_panel(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
                                                     .classes(&["gd_checkbox"])
                                                     .attr("type", "checkbox")
                                                     .attr("title", "Show layer",);
-                                            if layer.active.0 {
+                                            if !layer.inactive {
                                                 checkbox.ref_attr("checked", "");
                                             }
                                             checkbox.ref_on("change", {
@@ -91,7 +90,7 @@ pub fn build_panel(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
                                                     let Some(mut layer) = layer else {
                                                         return;
                                                     };
-                                                    layer.active = DefaultTrue(checked);
+                                                    layer.inactive = !checked;
                                                     state.eg.event(|pc| {
                                                         state.commit(pc, vec![Action::LayerModify(layer)], None);
                                                     });
@@ -172,8 +171,8 @@ pub fn build_panel(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
                                     let doc = state.doc.borrow();
                                     Layer {
                                         id: doc.new_layer_id(),
+                                        inactive: false,
                                         name: name,
-                                        active: DefaultTrue(true),
                                     }
                                 };
                                 state.commit(pc, vec![Action::LayerCreate {

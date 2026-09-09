@@ -1,7 +1,6 @@
 use {
     gloo_utils::document,
     grafdag_core::{
-        DefaultTrue,
         Document,
         Edge,
         EdgeId,
@@ -344,7 +343,7 @@ async fn layer_fade_animates_selection_does_not() {
     doc.layers.push(Layer {
         id: LayerId("M".into()),
         name: "Layer M".into(),
-        active: DefaultTrue(true),
+        inactive: false,
     });
     doc.nodes.iter_mut().find(|n| n.id.0 == "d").unwrap().layers = vec![LayerId("M".into())];
     doc.edges.iter_mut().find(|e| e.id.0 == "e1").unwrap().layer = Some(LayerId("L".into()));
@@ -413,7 +412,7 @@ fn layers_panel() {
             .unwrap();
     assert!(checkbox.checked());
     checkbox.click();
-    assert!(!h.widget.state().doc.borrow().layer(&LayerId("L".into())).unwrap().active.0);
+    assert!(h.widget.state().doc.borrow().layer(&LayerId("L".into())).unwrap().inactive);
     assert!(document().query_selector(".gd_node_wrap[data-node=\"c\"]").unwrap().is_none());
     assert_eq!(h.widget.state().layout.borrow().nodes.len(), 4);
     let name = document().query_selector(".gd_layer_name").unwrap().unwrap().dyn_into::<HtmlElement>().unwrap();
@@ -632,7 +631,7 @@ fn node_el(id: &str) -> Element {
 #[wasm_bindgen_test]
 fn node_moving_into_parent_keeps_element() {
     let mut doc = sample_doc();
-    doc.layers[0].active = DefaultTrue(false);
+    doc.layers[0].inactive = true;
     doc.nodes.iter_mut().find(|n| n.id.0 == "g").unwrap().layers = vec![LayerId("L".into())];
     let h = setup(doc);
     assert!(document().query_selector(".gd_node_wrap[data-node=\"g\"]").unwrap().is_none());
@@ -840,7 +839,7 @@ fn sample_doc() -> Document {
         layers: vec![Layer {
             id: LayerId("L".into()),
             name: "Layer L".into(),
-            active: DefaultTrue(true),
+            inactive: false,
         }],
         selected_layer: None,
         flow: Default::default(),

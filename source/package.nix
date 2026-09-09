@@ -11,9 +11,15 @@ let
     sha256 = "06y3dvs9ms4c70r2ia50k77650yrihc09jibqbqrzly23dn42s4m";
   };
   craneLib = import craneSrc { inherit pkgs; };
+  # `commonCargoSources` only picks up Rust sources; Tauri also needs its config
+  # and the window icon at compile time (`generate_context!`).
   src = lib.fileset.toSource {
     root = ./.;
-    fileset = craneLib.fileset.commonCargoSources ./.;
+    fileset = lib.fileset.unions [
+      (craneLib.fileset.commonCargoSources ./.)
+      ./crates/grafdag/tauri.conf.json
+      ./crates/grafdag/icons
+    ];
   };
   commonArgs = {
     inherit src;
@@ -48,12 +54,27 @@ let
     cp -r ${./static}/. $out/
   '';
 
-  # Server binary
+  # The app binary: local server plus either a desktop window or the browser
   serverArgs = commonArgs // {
     pname = "grafdag";
     version = "0.1.0";
     cargoExtraArgs = "--locked -p grafdag";
     env.GRAFDAG_STATIC_DIR = "${staging}";
+    # The desktop window is a Tauri/WRY webview; the browser mode (--browser)
+    # doesn't use these, but it's one binary so they're always linked.
+    nativeBuildInputs = [ pkgs.pkg-config pkgs.wrapGAppsHook3 ];
+    buildInputs = [
+      pkgs.webkitgtk_4_1
+      pkgs.gtk3
+      pkgs.libsoup_3
+      pkgs.glib
+      pkgs.cairo
+      pkgs.pango
+      pkgs.gdk-pixbuf
+      pkgs.atk
+      pkgs.librsvg
+      pkgs.openssl
+    ];
   };
   serverDeps = craneLib.buildDepsOnly serverArgs;
 in

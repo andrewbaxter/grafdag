@@ -3,17 +3,17 @@
     {
       "id": "flow",
       "name": "Request flow",
-      "active": true
+      "inactive": false
     },
     {
       "id": "k8s",
       "name": "Kubernetes resources",
-      "active": true
+      "inactive": false
     },
     {
       "id": "infra",
       "name": "Cloud infra",
-      "active": false
+      "inactive": true
     }
   ],
   "selected_layer": "k8s",

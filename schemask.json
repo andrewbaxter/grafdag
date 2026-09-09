@@ -1,0 +1,143 @@
+{
+  "v1": {
+    "bindings": {
+      "Document": {
+        "record": {
+          "fields": {
+            "edges": {
+              "maskoid": {
+                "list": {
+                  "ref": "Edge"
+                }
+              }
+            },
+            "flow": {
+              "maskoid": {
+                "ref": "Flow"
+              }
+            },
+            "layers": {
+              "maskoid": {
+                "list": {
+                  "ref": "Layer"
+                }
+              }
+            },
+            "nodes": {
+              "maskoid": {
+                "list": {
+                  "ref": "Node"
+                }
+              }
+            },
+            "selected_layer": {
+              "maskoid": {
+                "option": {
+                  "ref": "LayerId"
+                }
+              }
+            }
+          }
+        }
+      },
+      "Edge": {
+        "record": {
+          "fields": {
+            "dest": {
+              "maskoid": {
+                "ref": "NodeId"
+              }
+            },
+            "id": {
+              "maskoid": {
+                "ref": "EdgeId"
+              }
+            },
+            "layer": {
+              "maskoid": {
+                "option": {
+                  "ref": "LayerId"
+                }
+              }
+            },
+            "source": {
+              "maskoid": {
+                "ref": "NodeId"
+              }
+            },
+            "text": {
+              "maskoid": "string"
+            }
+          }
+        }
+      },
+      "EdgeId": "string",
+      "Flow": {
+        "tagged_union": {
+          "variants": {
+            "Down": {
+              "maskoid": "null"
+            },
+            "Left": {
+              "maskoid": "null"
+            },
+            "Right": {
+              "maskoid": "null"
+            },
+            "Up": {
+              "maskoid": "null"
+            }
+          }
+        }
+      },
+      "Layer": {
+        "record": {
+          "fields": {
+            "id": {
+              "maskoid": {
+                "ref": "LayerId"
+              }
+            },
+            "inactive": {
+              "maskoid": "bool"
+            },
+            "name": {
+              "maskoid": "string"
+            }
+          }
+        }
+      },
+      "LayerId": "string",
+      "Node": {
+        "record": {
+          "fields": {
+            "id": {
+              "maskoid": {
+                "ref": "NodeId"
+              }
+            },
+            "layers": {
+              "maskoid": {
+                "list": {
+                  "ref": "LayerId"
+                }
+              }
+            },
+            "parents": {
+              "maskoid": {
+                "list": {
+                  "ref": "NodeId"
+                }
+              }
+            },
+            "text": {
+              "maskoid": "string"
+            }
+          }
+        }
+      },
+      "NodeId": "string"
+    },
+    "default": "Document"
+  }
+}

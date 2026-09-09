@@ -6,16 +6,7 @@ use {
     std::collections::HashSet,
 };
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct DefaultTrue(pub bool);
-
-impl Default for DefaultTrue {
-    fn default() -> Self {
-        return DefaultTrue(true);
-    }
-}
-
+#[cfg_attr(feature = "schemask", derive(schemask_derive::Maskoidy))]
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct Document {
     #[serde(default)]
@@ -66,7 +57,7 @@ impl Document {
     }
 
     pub fn layer_active(&self, id: &LayerId) -> bool {
-        return self.layer(id).map(|l| l.active.0).unwrap_or(false);
+        return self.layer(id).map(|l| !l.inactive).unwrap_or(false);
     }
 
     pub fn layer_mut(&mut self, id: &LayerId) -> Option<&mut Layer> {
@@ -158,6 +149,7 @@ impl Document {
     }
 }
 
+#[cfg_attr(feature = "schemask", derive(schemask_derive::Maskoidy))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Edge {
     pub dest: NodeId,
@@ -169,22 +161,26 @@ pub struct Edge {
     pub text: String,
 }
 
+#[cfg_attr(feature = "schemask", derive(schemask_derive::Maskoidy))]
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct EdgeId(pub String);
 
+#[cfg_attr(feature = "schemask", derive(schemask_derive::Maskoidy))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Layer {
-    #[serde(default)]
-    pub active: DefaultTrue,
     pub id: LayerId,
+    #[serde(default)]
+    pub inactive: bool,
     pub name: String,
 }
 
+#[cfg_attr(feature = "schemask", derive(schemask_derive::Maskoidy))]
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct LayerId(pub String);
 
+#[cfg_attr(feature = "schemask", derive(schemask_derive::Maskoidy))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Node {
     pub id: NodeId,
@@ -196,6 +192,7 @@ pub struct Node {
     pub text: String,
 }
 
+#[cfg_attr(feature = "schemask", derive(schemask_derive::Maskoidy))]
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct NodeId(pub String);

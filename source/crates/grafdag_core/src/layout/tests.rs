@@ -1,6 +1,5 @@
 use {
     crate::document::{
-        DefaultTrue,
         Edge,
         Layer,
         Node,
@@ -206,7 +205,7 @@ fn ghosts_and_hidden_layers() {
         layers: vec![Layer {
             id: LayerId("L".into()),
             name: "L".into(),
-            active: DefaultTrue(false),
+            inactive: true,
         }],
         selected_layer: None,
         flow: Default::default(),
@@ -281,7 +280,7 @@ fn nested_containers() {
         layers: vec![Layer {
             id: LayerId("L".into()),
             name: "L".into(),
-            active: DefaultTrue(true),
+            inactive: false,
         }],
         selected_layer: Some(LayerId("L".into())),
         flow: Default::default(),
