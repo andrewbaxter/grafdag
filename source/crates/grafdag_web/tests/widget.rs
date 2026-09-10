@@ -385,7 +385,8 @@ async fn layer_fade_animates_selection_does_not() {
         .dispatch_event(&MouseEvent::new_with_mouse_event_init_dict("mouseenter", &hover_init).unwrap())
         .unwrap();
     assert_eq!(opacity("c"), 1.);
-    assert_eq!(opacity("a"), 1.);
+    // Hovering re-fades the selection.
+    assert_eq!(opacity("a"), 0.6);
     node_el("c")
         .dispatch_event(&MouseEvent::new_with_mouse_event_init_dict("mouseleave", &hover_init).unwrap())
         .unwrap();
@@ -582,7 +583,8 @@ fn mouse_selection_and_zoom() {
         .dispatch_event(&MouseEvent::new_with_mouse_event_init_dict("mouseenter", &hover_init).unwrap())
         .unwrap();
     assert!(node_el("c").class_list().contains("gd_active"));
-    assert!(node_el("a").class_list().contains("gd_active"));
+    // Hovering re-fades the selection.
+    assert!(!node_el("a").class_list().contains("gd_active"));
     node_el("c")
         .dispatch_event(&MouseEvent::new_with_mouse_event_init_dict("mouseleave", &hover_init).unwrap())
         .unwrap();

@@ -68,13 +68,18 @@ fn apply_selection(pc: &mut ProcessingContext, state: &Rc<State>, animate: bool)
         (Some(s), Some(e)) => state.connecting(s, e),
         _ => (vec![], vec![]),
     };
+    // Hovering a node re-fades the selection: the hovered node (and its edges)
+    // takes over as the unfaded thing until the pointer leaves.
+    let hovering = hover.is_some();
     let mut spreading: Vec<NodeId> = hover.iter().chain(peek.iter()).cloned().collect();
-    if start.is_none() {
+    if start.is_none() && !hovering {
         spreading.extend(end.iter().cloned());
     }
     let mut active = spreading.clone();
-    active.extend(start.iter().chain(end.iter()).cloned());
-    active.extend(walk_nodes);
+    if !hovering {
+        active.extend(start.iter().chain(end.iter()).cloned());
+        active.extend(walk_nodes);
+    }
     if let Some(h) = &hover_edge {
         for (key, v) in render.edges.iter() {
             if &key.0 == h {
@@ -124,8 +129,8 @@ fn apply_selection(pc: &mut ProcessingContext, state: &Rc<State>, animate: bool)
     for (key, v) in render.edges.iter_mut() {
         let selected = sel_edge.as_ref() == Some(&key.0);
         let is_active =
-            spreading.contains(&v.source) || spreading.contains(&v.dest) || connecting.contains(&key.0) ||
-                hover_edge.as_ref() == Some(&key.0);
+            spreading.contains(&v.source) || spreading.contains(&v.dest) ||
+                (!hovering && connecting.contains(&key.0)) || hover_edge.as_ref() == Some(&key.0);
         v.el.ref_modify_classes(&[("gd_edge_selected", selected), ("gd_active", is_active)]);
         let path = v.el.clone();
         let label = v.label.clone();

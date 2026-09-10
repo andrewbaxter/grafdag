@@ -627,3 +627,88 @@ fn wide_ranks_are_split() {
         assert_eq!(n.nav, l3.node(&n.id).unwrap().nav);
     }
 }
+
+#[test]
+fn links_never_share_an_end_point() {
+    // Assorted small graphs, including links to and from container nodes, where
+    // ports are easy to collapse onto one point.
+    let mut seed: u64 = 12345;
+    let mut rnd = move || {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        return (seed >> 33) as usize;
+    };
+    for trial in 0 .. 400 {
+        let n_groups = rnd() % 4;
+        let n_nodes = 4 + rnd() % 8;
+        let mut nodes = vec![];
+        for g in 0 .. n_groups {
+            let parent = if g > 0 && rnd() % 3 == 0 {
+                vec![format!("g{}", rnd() % g)]
+            } else {
+                vec![]
+            };
+            nodes.push(node(&format!("g{}", g), &parent.iter().map(|p| p.as_str()).collect::<Vec<_>>(), &[]));
+        }
+        for i in 0 .. n_nodes {
+            let parent = if n_groups > 0 && rnd() % 2 == 0 {
+                vec![format!("g{}", rnd() % n_groups)]
+            } else {
+                vec![]
+            };
+            nodes.push(node(&format!("n{}", i), &parent.iter().map(|p| p.as_str()).collect::<Vec<_>>(), &[]));
+        }
+        let mut edges = vec![];
+        for e in 0 .. n_nodes + rnd() % (2 * n_nodes) {
+            let mut end = || {
+                let i = rnd() % n_nodes;
+                if n_groups > 0 && rnd() % 4 == 0 {
+                    return format!("g{}", i % n_groups);
+                } else {
+                    return format!("n{}", i);
+                }
+            };
+            let (source, dest) = (end(), end());
+            if source == dest {
+                continue;
+            }
+            edges.push(edge(&format!("e{}", e), &source, &dest));
+        }
+        let doc = Document {
+            layers: vec![],
+            selected_layer: None,
+            flow: Default::default(),
+            nodes: nodes,
+            edges: edges,
+        };
+        for flow in Flow::ALL {
+            let mut config = LayoutConfig::default();
+            config.flow = flow;
+            let l = layout(&doc, &sizes(&doc), &no_titles(), &config, None);
+            check_no_sibling_overlap(&l);
+            let mut ends: HashMap<(PlacementId, i64, i64), Vec<&EdgeId>> = HashMap::new();
+            for e in &l.edges {
+                for (at, p) in [(&e.source, e.points.first()), (&e.dest, e.points.last())] {
+                    let Some(p) = p else {
+                        continue;
+                    };
+                    ends
+                        .entry((at.clone(), (p.x * 10.).round() as i64, (p.y * 10.).round() as i64))
+                        .or_default()
+                        .push(&e.id);
+                }
+            }
+            for ((at, x, y), sharing) in &ends {
+                assert!(
+                    sharing.len() == 1,
+                    "trial {} {:?}: {:?} all meet {:?} at {},{}",
+                    trial,
+                    flow,
+                    sharing,
+                    at,
+                    *x as f64 / 10.,
+                    *y as f64 / 10.
+                );
+            }
+        }
+    }
+}

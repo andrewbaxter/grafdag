@@ -918,41 +918,61 @@ pub(crate) fn layout_container(ctx: &mut Ctx, container: Option<usize>, exits: V
                             if edges.is_empty() {
                                 continue;
                             }
-                            let left = node.x - node.w / 2.;
-                            if let Some((fixed, inset)) = &fixed {
-                                for e in &edges {
-                                    let inst = l.edges[*e].inst;
-                                    let x = fixed.get(&inst).map(|(_, x)| left + inset + x).unwrap_or(node.x);
-                                    if down {
-                                        l.edges[*e].x_upper = x;
-                                    } else {
-                                        l.edges[*e].x_lower = x;
-                                    }
-                                }
-                                continue;
-                            }
-                            let mut keyed: Vec<(f64, usize)> = edges.iter().map(|e| {
-                                let other = if down {
-                                    l.edges[*e].lower
+                            let place = |l: &mut order::Layered, e: usize, x: f64| {
+                                if down {
+                                    l.edges[e].x_upper = x;
                                 } else {
-                                    l.edges[*e].upper
-                                };
-                                (l.nodes[other].x, *e)
-                            }).collect();
-                            keyed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.cmp(&b.1)));
-                            let n = keyed.len() as f64;
-                            let spacing = if keyed.len() > 1 {
+                                    l.edges[e].x_lower = x;
+                                }
+                            };
+
+                            // Evenly spaced candidate positions across the side, one per edge.
+                            let n = edges.len() as f64;
+                            let spacing = if edges.len() > 1 {
                                 config.port_gap.min((node.w - 2. * config.port_margin) / (n - 1.))
                             } else {
                                 0.
                             };
-                            for (i, (_, e)) in keyed.iter().enumerate() {
-                                let x = node.x + (i as f64 - (n - 1.) / 2.) * spacing;
-                                if down {
-                                    l.edges[*e].x_upper = x;
-                                } else {
-                                    l.edges[*e].x_lower = x;
+                            let mut slots: Vec<f64> =
+                                (0 .. edges.len())
+                                    .map(|i| node.x + (i as f64 - (n - 1.) / 2.) * spacing)
+                                    .collect();
+
+                            // Edges that continue into a container attach where the
+                            // container's own layout put them; the rest are spread over the
+                            // slots those don't already occupy.
+                            let mut free: Vec<(f64, usize)> = vec![];
+                            let left = node.x - node.w / 2.;
+                            for e in &edges {
+                                let inst = l.edges[*e].inst;
+                                let at = match &fixed {
+                                    Some((fixed, inset)) => fixed.get(&inst).map(|(_, x)| left + inset + x),
+                                    None => None,
+                                };
+                                match at {
+                                    Some(x) => {
+                                        place(&mut l, *e, x);
+                                        if let Some((i, _)) =
+                                            slots
+                                                .iter()
+                                                .enumerate()
+                                                .min_by(|a, b| (a.1 - x).abs().partial_cmp(&(b.1 - x).abs()).unwrap()) {
+                                            slots.remove(i);
+                                        }
+                                    },
+                                    None => {
+                                        let other = if down {
+                                            l.edges[*e].lower
+                                        } else {
+                                            l.edges[*e].upper
+                                        };
+                                        free.push((l.nodes[other].x, *e));
+                                    },
                                 }
+                            }
+                            free.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.cmp(&b.1)));
+                            for ((_, e), x) in free.iter().zip(slots.iter()) {
+                                place(&mut l, *e, *x);
                             }
                         }
                     },
@@ -1169,6 +1189,51 @@ pub(crate) fn layout_container(ctx: &mut Ctx, container: Option<usize>, exits: V
         exit_ports: HashMap::new(),
         islands: vec![],
     };
+    // Links to a node's own container all end on its title. A side title runs
+    // along the flow, so they'd otherwise stack on the one point where their
+    // lanes reach the container's edge; spread them down the strip instead,
+    // leaving each lane where it last turned at the latest. Lanes further from
+    // the strip land first, so the legs to it don't cross each other's lanes.
+    let strip_y: HashMap<(usize, usize), f64> = {
+        struct Landing {
+            across: f64,
+            base: f64,
+            chain: (usize, usize),
+            corner: f64,
+        }
+
+        let mut landings: Vec<Landing> = vec![];
+        for (island_i, island) in islands.iter().enumerate() {
+            for (i, c) in island.chains.iter().enumerate() {
+                if !matches!(c.kind, position::ChainKind::Exit { to_self: true, .. }) {
+                    continue;
+                }
+                let Some(e) = c.edges.first().map(|e| &island.layered.edges[*e]) else {
+                    continue;
+                };
+                let upper = &island.layered.nodes[e.upper];
+                let lower = &island.layered.nodes[e.lower];
+                landings.push(Landing {
+                    across: island_x[island_i] + e.x_upper,
+                    base: origin.y + position::node_top(island, upper) + upper.h,
+                    chain: (island_i, i),
+                    corner: origin.y + if (e.x_upper - e.x_lower).abs() > 0.01 {
+                        island.track_y[upper.rank][e.track.unwrap_or(0)]
+                    } else {
+                        position::node_top(island, lower)
+                    },
+                });
+            }
+        }
+        landings.sort_by(|a, b| b.across.partial_cmp(&a.across).unwrap().then(a.chain.cmp(&b.chain)));
+        let room = landings.iter().map(|l| l.corner - l.base).fold(f64::MAX, f64::min);
+        let spacing = if landings.len() > 1 {
+            config.port_gap.min(room.max(0.) / (landings.len() as f64 - 1.))
+        } else {
+            0.
+        };
+        landings.iter().enumerate().map(|(k, l)| (l.chain, l.base + k as f64 * spacing)).collect()
+    };
     for (island_i, island) in islands.iter().enumerate() {
         let off = pt(origin.x + island_x[island_i], origin.y);
         let l = &island.layered;
@@ -1202,7 +1267,7 @@ pub(crate) fn layout_container(ctx: &mut Ctx, container: Option<usize>, exits: V
             }
         }
         result.islands.push(island.real_ranks.clone());
-        for chain in &island.chains {
+        for (chain_i, chain) in island.chains.iter().enumerate() {
             let mut points: Vec<Pt> = vec![];
             for (i, ei) in chain.edges.iter().enumerate() {
                 let e = &l.edges[*ei];
@@ -1238,7 +1303,20 @@ pub(crate) fn layout_container(ctx: &mut Ctx, container: Option<usize>, exits: V
                     }
                     let last = points.last().cloned().unwrap();
                     if to_self {
-                        points.push(title_end(last));
+                        if config.flow.title_at() == TitleAt::SideStart {
+                            let end = pt(last.x, strip_y.get(&(island_i, chain_i)).cloned().unwrap_or(last.y));
+                            // Leave the lane where it last turned at the latest,
+                            // shortening that leg rather than doubling back over it.
+                            if points.len() >= 2 && (points[points.len() - 2].x - end.x).abs() < 0.01 {
+                                points.pop();
+                            }
+                            if points.last() != Some(&end) {
+                                points.push(end);
+                            }
+                            points.push(title_end(end));
+                        } else {
+                            points.push(title_end(last));
+                        }
                     } else if side == Side::Before {
                         points.push(pt(last.x, 0.));
                     } else {
