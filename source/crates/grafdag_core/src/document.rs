@@ -115,6 +115,34 @@ impl Document {
         return node.layers.iter().any(|l| self.layer_active(l));
     }
 
+    /// Resolves a node's parents to visible ancestors, descending through invisible
+    /// parents to their own parents. Returns depth-first order with duplicates removed.
+    pub fn visible_parents(&self, id: &NodeId) -> Vec<NodeId> {
+        let mut out = vec![];
+        let mut seen = HashSet::new();
+        seen.insert(id.clone());
+        let Some(node) = self.node(id) else {
+            return out;
+        };
+        let mut stack: Vec<NodeId> = node.parents.iter().rev().cloned().collect();
+        while let Some(p) = stack.pop() {
+            if !seen.insert(p.clone()) {
+                continue;
+            }
+            let Some(n) = self.node(&p) else {
+                continue;
+            };
+            if self.node_visible(n) {
+                out.push(p);
+                continue;
+            }
+            for q in n.parents.iter().rev() {
+                stack.push(q.clone());
+            }
+        }
+        return out;
+    }
+
     pub fn sanitize(&mut self) -> bool {
         let mut changed = false;
         let node_ids: HashSet<NodeId> = self.nodes.iter().map(|n| n.id.clone()).collect();

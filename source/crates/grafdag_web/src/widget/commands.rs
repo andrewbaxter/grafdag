@@ -69,7 +69,7 @@ impl State {
         return self
             .visible_nodes()
             .into_iter()
-            .filter(|c| doc.node(c).map(|n| n.parents.contains(id)).unwrap_or(false))
+            .filter(|c| doc.visible_parents(c).contains(id))
             .collect();
     }
 
@@ -635,11 +635,7 @@ impl State {
 
     pub fn parent_nodes(&self, id: &NodeId) -> Vec<NodeId> {
         let doc = self.doc.borrow();
-        let Some(n) = doc.node(id) else {
-            return vec![];
-        };
-        let visible = self.visible_nodes();
-        return n.parents.iter().filter(|p| visible.contains(p)).cloned().collect();
+        return doc.visible_parents(id);
     }
 
     fn pick_recent(&self, candidates: &[NodeId]) -> Option<NodeId> {

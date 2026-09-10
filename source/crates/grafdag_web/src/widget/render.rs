@@ -209,15 +209,14 @@ pub fn build_canvas(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
                         if !visible.contains(&n.id) {
                             continue;
                         }
-                        let primary = n.parents.iter().find(|p| *p != &n.id && visible.contains(p)).cloned();
+                        let parents = doc.visible_parents(&n.id);
+                        let primary = parents.first().cloned();
                         wanted.push(PlacementId {
                             node: n.id.clone(),
                             container: primary.clone(),
                         });
-                        let mut seen = HashSet::new();
-                        for p in &n.parents {
-                            if p == &n.id || !visible.contains(p) || Some(p) == primary.as_ref() ||
-                                !seen.insert(p.clone()) {
+                        for p in &parents {
+                            if Some(p) == primary.as_ref() {
                                 continue;
                             }
                             wanted.push(PlacementId {
@@ -379,9 +378,7 @@ pub fn build_canvas(pc: &mut ProcessingContext, state: &Rc<State>) -> El {
                             };
                             node_text_el(e).unwrap().ref_text(display);
                         }
-                        let ghost =
-                            !(node.parents.iter().find(|p| *p != &id.node && visible.contains(p)) ==
-                                id.container.as_ref());
+                        let ghost = doc.visible_parents(&id.node).first() != id.container.as_ref();
                         if !ghost {
                             if text_changed && e.raw().is_connected() {
                                 let prev = measured.get(&id.node).cloned();

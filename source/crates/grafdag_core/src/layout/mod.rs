@@ -269,12 +269,12 @@ pub fn layout(
         height: 24.,
     });
     let visible: Vec<&NodeId> = doc.nodes.iter().filter(|n| doc.node_visible(n)).map(|n| &n.id).collect();
-    let visible_set: HashSet<&NodeId> = visible.iter().cloned().collect();
+    let mut visible_parents: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
     let mut primary_parent: HashMap<NodeId, Option<NodeId>> = HashMap::new();
     for id in &visible {
-        let node = doc.node(id).unwrap();
-        let parent = node.parents.iter().find(|p| *p != *id && visible_set.contains(p)).cloned();
-        primary_parent.insert((*id).clone(), parent);
+        let parents = doc.visible_parents(id);
+        primary_parent.insert((*id).clone(), parents.first().cloned());
+        visible_parents.insert((*id).clone(), parents);
     }
     for id in &visible {
         let mut seen = HashSet::new();
@@ -315,11 +315,9 @@ pub fn layout(
         });
     }
     for id in &visible {
-        let node = doc.node(id).unwrap();
         let primary = primary_parent.get(*id).cloned().flatten();
-        let mut seen = HashSet::new();
-        for p in &node.parents {
-            if p == *id || !visible_set.contains(p) || Some(p) == primary.as_ref() || !seen.insert(p.clone()) {
+        for p in &visible_parents[*id] {
+            if Some(p) == primary.as_ref() {
                 continue;
             }
             placements.push(Placement {

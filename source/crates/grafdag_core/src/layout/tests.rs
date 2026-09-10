@@ -229,6 +229,37 @@ fn ghosts_and_hidden_layers() {
 }
 
 #[test]
+fn parents_through_hidden_layers() {
+    let doc = Document {
+        layers: vec![Layer {
+            id: LayerId("L".into()),
+            name: "L".into(),
+            inactive: true,
+        }],
+        selected_layer: None,
+        flow: Default::default(),
+        nodes: vec![
+            node("g", &[], &[]),
+            node("mid", &["g"], &["L"]),
+            node("a", &["mid"], &[]),
+            node("b", &["mid"], &[]),
+        ],
+        edges: vec![edge("e1", "a", "b")],
+    };
+    let l = layout(&doc, &sizes(&doc), &no_titles(), &LayoutConfig::default(), None);
+    assert!(l.primary(&NodeId("mid".into())).is_none());
+    let g = l.primary(&NodeId("g".into())).unwrap();
+    assert!(g.container);
+    for id in ["a", "b"] {
+        let n = l.primary(&NodeId(id.into())).unwrap();
+        assert_eq!(n.id.container, Some(NodeId("g".into())), "{} not contained by g", id);
+        assert_eq!(n.depth, 1);
+    }
+    check_no_sibling_overlap(&l);
+    check_orthogonal(&l);
+}
+
+#[test]
 fn islands_and_cycle() {
     let doc = Document {
         layers: vec![],
