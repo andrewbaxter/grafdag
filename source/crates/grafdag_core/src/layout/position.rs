@@ -51,7 +51,7 @@ fn is_thin(n: &LNode) -> bool {
     return !matches!(n.kind, LKind::Real(_));
 }
 
-pub(super) struct IslandLayout {
+pub(crate) struct IslandLayout {
     pub(super) chains: Vec<Chain>,
     pub(super) height: f64,
     pub(super) layered: Layered,

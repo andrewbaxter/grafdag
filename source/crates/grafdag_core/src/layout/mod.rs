@@ -31,8 +31,21 @@ pub(crate) struct ContainerResult {
     pub title_height: f64,
 }
 
+/// A container's routing, kept until its own position is known so that every
+/// point can be built in the final frame. Coordinates in it are relative to the
+/// container's box, like the rest of a `ContainerResult`.
+pub(crate) struct Geometry {
+    pub island_x: Vec<f64>,
+    pub islands: Vec<position::IslandLayout>,
+    pub origin: Pt,
+    pub self_loops: Vec<(usize, Rect)>,
+    pub size: NodeSize,
+    pub title_height: f64,
+}
+
 pub(crate) struct Ctx<'a> {
     pub config: &'a LayoutConfig,
+    pub geometry: HashMap<Option<usize>, Geometry>,
     pub instances: Vec<EdgeInstance>,
     pub paths: Vec<EdgePath>,
     pub placements: Vec<Placement>,
@@ -67,10 +80,10 @@ pub(crate) struct EdgeInstance {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct EdgePath {
-    pub dest_stubs: Vec<PathPiece>,
-    pub main: Option<PathPiece>,
+    pub dest_stubs: Vec<Vec<Pt>>,
+    pub main: Option<Vec<Pt>>,
     pub reversed: bool,
-    pub source_stubs: Vec<PathPiece>,
+    pub source_stubs: Vec<Vec<Pt>>,
 }
 
 #[derive(Clone, Debug)]
@@ -396,6 +409,7 @@ pub fn layout(
     let n_inst = instances.len();
     let mut ctx = Ctx {
         config: config,
+        geometry: HashMap::new(),
         placements: placements,
         instances: instances,
         prev_x: prev_x,
@@ -475,21 +489,27 @@ pub fn layout(
             });
         }
     }
+    // Innermost first, so a link that crosses several borders collects its
+    // pieces in the order it passes through them.
+    for (container, _) in visit_order.iter().rev() {
+        let Some(geom) = ctx.geometry.remove(container) else {
+            continue;
+        };
+        emit_paths(geom, ctx.config, origins[container], &mut ctx.paths);
+    }
     for (i, path) in ctx.paths.iter().enumerate() {
         let inst = &ctx.instances[i];
         let Some(main) = &path.main else {
             continue;
         };
         let mut points: Vec<Pt> = vec![];
-        let push_piece = |points: &mut Vec<Pt>, piece: &PathPiece, reverse: bool| {
-            let Some(origin) = origins.get(&piece.container) else {
-                return;
-            };
-            let mut pts: Vec<Pt> = piece.points.iter().map(|p| pt(origin.x + p.x, origin.y + p.y)).collect();
-            if reverse {
-                pts.reverse();
-            }
-            for p in pts {
+        let push_piece = |points: &mut Vec<Pt>, piece: &[Pt], reverse: bool| {
+            for k in 0 .. piece.len() {
+                let p = if reverse {
+                    piece[piece.len() - 1 - k]
+                } else {
+                    piece[k]
+                };
                 if points
                     .last()
                     .map(|l: &Pt| (l.x - p.x).abs() < 0.01 && (l.y - p.y).abs() < 0.01)
@@ -552,6 +572,149 @@ pub fn layout(
         });
     }
     return out;
+}
+
+/// Turns one container's routing into polylines. It runs once the container's
+/// own position is known, so every point is built in the final frame.
+fn emit_paths(geom: Geometry, config: &LayoutConfig, at: Pt, paths: &mut [EdgePath]) {
+    let base = pt(at.x + geom.origin.x, at.y + geom.origin.y);
+    let title_end = |last: Pt| -> Pt {
+        match config.flow.title_at() {
+            TitleAt::RankStart => pt(last.x, at.y + geom.title_height),
+            TitleAt::RankEnd => pt(last.x, at.y + geom.size.height - geom.title_height),
+            TitleAt::SideStart => pt(at.x + geom.title_height, last.y),
+        }
+    };
+
+    // Links to a node's own container all end on its title. A side title runs
+    // along the flow, so they'd otherwise stack on the one point where their
+    // lanes reach the container's edge; spread them down the strip instead,
+    // leaving each lane where it last turned at the latest. Lanes further from
+    // the strip land first, so the legs to it don't cross each other's lanes.
+    let strip_y: HashMap<(usize, usize), f64> = {
+        struct Landing {
+            across: f64,
+            base: f64,
+            chain: (usize, usize),
+            corner: f64,
+        }
+
+        let mut landings: Vec<Landing> = vec![];
+        for (island_i, island) in geom.islands.iter().enumerate() {
+            for (i, c) in island.chains.iter().enumerate() {
+                if !matches!(c.kind, position::ChainKind::Exit { to_self: true, .. }) {
+                    continue;
+                }
+                let Some(e) = c.edges.first().map(|e| &island.layered.edges[*e]) else {
+                    continue;
+                };
+                let upper = &island.layered.nodes[e.upper];
+                let lower = &island.layered.nodes[e.lower];
+                landings.push(Landing {
+                    across: geom.island_x[island_i] + e.x_upper,
+                    base: base.y + position::node_top(island, upper) + upper.h,
+                    chain: (island_i, i),
+                    corner: base.y + if (e.x_upper - e.x_lower).abs() > 0.01 {
+                        island.track_y[upper.rank][e.track.unwrap_or(0)]
+                    } else {
+                        position::node_top(island, lower)
+                    },
+                });
+            }
+        }
+        landings.sort_by(|a, b| b.across.partial_cmp(&a.across).unwrap().then(a.chain.cmp(&b.chain)));
+        let room = landings.iter().map(|l| l.corner - l.base).fold(f64::MAX, f64::min);
+        let spacing = if landings.len() > 1 {
+            config.port_gap.min(room.max(0.) / (landings.len() as f64 - 1.))
+        } else {
+            0.
+        };
+        landings.iter().enumerate().map(|(k, l)| (l.chain, l.base + k as f64 * spacing)).collect()
+    };
+    for (island_i, island) in geom.islands.iter().enumerate() {
+        let off = pt(base.x + geom.island_x[island_i], base.y);
+        let l = &island.layered;
+        for (chain_i, chain) in island.chains.iter().enumerate() {
+            let mut points: Vec<Pt> = vec![];
+            for (i, ei) in chain.edges.iter().enumerate() {
+                let e = &l.edges[*ei];
+                let upper = &l.nodes[e.upper];
+                let lower = &l.nodes[e.lower];
+                let y_upper = position::node_top(island, upper) + upper.h;
+                let y_lower = position::node_top(island, lower);
+                if i == 0 {
+                    points.push(pt(e.x_upper, y_upper));
+                }
+                if (e.x_upper - e.x_lower).abs() > 0.01 {
+                    let ty = island.track_y[upper.rank][e.track.unwrap_or(0)];
+                    points.push(pt(e.x_upper, ty));
+                    points.push(pt(e.x_lower, ty));
+                }
+                points.push(pt(e.x_lower, y_lower));
+            }
+            let mut points: Vec<Pt> = points.into_iter().map(|p| pt(off.x + p.x, off.y + p.y)).collect();
+            match chain.kind {
+                position::ChainKind::Internal { source_upper } => {
+                    if !source_upper {
+                        points.reverse();
+                    }
+                    paths[chain.inst].main = Some(points);
+                    paths[chain.inst].reversed = !source_upper;
+                },
+                position::ChainKind::Exit { side, outgoing, to_self } => {
+                    if side == Side::Before {
+                        points.reverse();
+                    }
+                    let last = points.last().cloned().unwrap();
+                    if to_self {
+                        if config.flow.title_at() == TitleAt::SideStart {
+                            let end = pt(last.x, strip_y.get(&(island_i, chain_i)).cloned().unwrap_or(last.y));
+                            // Leave the lane where it last turned at the latest,
+                            // shortening that leg rather than doubling back over it.
+                            if points.len() >= 2 && (points[points.len() - 2].x - end.x).abs() < 0.01 {
+                                points.pop();
+                            }
+                            if points.last() != Some(&end) {
+                                points.push(end);
+                            }
+                            points.push(title_end(end));
+                        } else {
+                            points.push(title_end(last));
+                        }
+                    } else if side == Side::Before {
+                        points.push(pt(last.x, at.y));
+                    } else {
+                        points.push(pt(last.x, at.y + geom.size.height));
+                    }
+                    if outgoing {
+                        paths[chain.inst].source_stubs.push(points);
+                    } else {
+                        paths[chain.inst].dest_stubs.push(points);
+                    }
+                    if to_self {
+                        paths[chain.inst].main = Some(vec![]);
+                    }
+                },
+            }
+        }
+    }
+    for (inst, rect) in &geom.self_loops {
+        let d = config.port_gap;
+        let (top, bottom) = (at.y + rect.y, at.y + rect.bottom());
+        let right = at.x + rect.right();
+        let x = right - config.port_margin;
+        paths[*inst].main =
+            Some(
+                vec![
+                    pt(x, bottom),
+                    pt(x, bottom + d),
+                    pt(right + d, bottom + d),
+                    pt(right + d, top - d),
+                    pt(x, top - d),
+                    pt(x, top)
+                ],
+            );
+    }
 }
 
 pub(crate) fn layout_container(ctx: &mut Ctx, container: Option<usize>, exits: Vec<ExitInfo>) -> ContainerResult {
@@ -1174,13 +1337,6 @@ pub(crate) fn layout_container(ctx: &mut Ctx, container: Option<usize>, exits: V
             }
         },
     };
-    let title_end = |last: Pt| -> Pt {
-        match config.flow.title_at() {
-            TitleAt::RankStart => pt(last.x, title_height),
-            TitleAt::RankEnd => pt(last.x, size.height - title_height),
-            TitleAt::SideStart => pt(title_height, last.y),
-        }
-    };
     let mut result = ContainerResult {
         size: size,
         title_height: title_height,
@@ -1188,51 +1344,6 @@ pub(crate) fn layout_container(ctx: &mut Ctx, container: Option<usize>, exits: V
         members: vec![],
         exit_ports: HashMap::new(),
         islands: vec![],
-    };
-    // Links to a node's own container all end on its title. A side title runs
-    // along the flow, so they'd otherwise stack on the one point where their
-    // lanes reach the container's edge; spread them down the strip instead,
-    // leaving each lane where it last turned at the latest. Lanes further from
-    // the strip land first, so the legs to it don't cross each other's lanes.
-    let strip_y: HashMap<(usize, usize), f64> = {
-        struct Landing {
-            across: f64,
-            base: f64,
-            chain: (usize, usize),
-            corner: f64,
-        }
-
-        let mut landings: Vec<Landing> = vec![];
-        for (island_i, island) in islands.iter().enumerate() {
-            for (i, c) in island.chains.iter().enumerate() {
-                if !matches!(c.kind, position::ChainKind::Exit { to_self: true, .. }) {
-                    continue;
-                }
-                let Some(e) = c.edges.first().map(|e| &island.layered.edges[*e]) else {
-                    continue;
-                };
-                let upper = &island.layered.nodes[e.upper];
-                let lower = &island.layered.nodes[e.lower];
-                landings.push(Landing {
-                    across: island_x[island_i] + e.x_upper,
-                    base: origin.y + position::node_top(island, upper) + upper.h,
-                    chain: (island_i, i),
-                    corner: origin.y + if (e.x_upper - e.x_lower).abs() > 0.01 {
-                        island.track_y[upper.rank][e.track.unwrap_or(0)]
-                    } else {
-                        position::node_top(island, lower)
-                    },
-                });
-            }
-        }
-        landings.sort_by(|a, b| b.across.partial_cmp(&a.across).unwrap().then(a.chain.cmp(&b.chain)));
-        let room = landings.iter().map(|l| l.corner - l.base).fold(f64::MAX, f64::min);
-        let spacing = if landings.len() > 1 {
-            config.port_gap.min(room.max(0.) / (landings.len() as f64 - 1.))
-        } else {
-            0.
-        };
-        landings.iter().enumerate().map(|(k, l)| (l.chain, l.base + k as f64 * spacing)).collect()
     };
     for (island_i, island) in islands.iter().enumerate() {
         let off = pt(origin.x + island_x[island_i], origin.y);
@@ -1267,100 +1378,18 @@ pub(crate) fn layout_container(ctx: &mut Ctx, container: Option<usize>, exits: V
             }
         }
         result.islands.push(island.real_ranks.clone());
-        for (chain_i, chain) in island.chains.iter().enumerate() {
-            let mut points: Vec<Pt> = vec![];
-            for (i, ei) in chain.edges.iter().enumerate() {
-                let e = &l.edges[*ei];
-                let upper = &l.nodes[e.upper];
-                let lower = &l.nodes[e.lower];
-                let y_upper = position::node_top(island, upper) + upper.h;
-                let y_lower = position::node_top(island, lower);
-                if i == 0 {
-                    points.push(pt(e.x_upper, y_upper));
-                }
-                if (e.x_upper - e.x_lower).abs() > 0.01 {
-                    let ty = island.track_y[upper.rank][e.track.unwrap_or(0)];
-                    points.push(pt(e.x_upper, ty));
-                    points.push(pt(e.x_lower, ty));
-                }
-                points.push(pt(e.x_lower, y_lower));
-            }
-            let mut points: Vec<Pt> = points.into_iter().map(|p| pt(off.x + p.x, off.y + p.y)).collect();
-            match chain.kind {
-                position::ChainKind::Internal { source_upper } => {
-                    if !source_upper {
-                        points.reverse();
-                    }
-                    ctx.paths[chain.inst].main = Some(PathPiece {
-                        container: container,
-                        points: points,
-                    });
-                    ctx.paths[chain.inst].reversed = !source_upper;
-                },
-                position::ChainKind::Exit { side, outgoing, to_self } => {
-                    if side == Side::Before {
-                        points.reverse();
-                    }
-                    let last = points.last().cloned().unwrap();
-                    if to_self {
-                        if config.flow.title_at() == TitleAt::SideStart {
-                            let end = pt(last.x, strip_y.get(&(island_i, chain_i)).cloned().unwrap_or(last.y));
-                            // Leave the lane where it last turned at the latest,
-                            // shortening that leg rather than doubling back over it.
-                            if points.len() >= 2 && (points[points.len() - 2].x - end.x).abs() < 0.01 {
-                                points.pop();
-                            }
-                            if points.last() != Some(&end) {
-                                points.push(end);
-                            }
-                            points.push(title_end(end));
-                        } else {
-                            points.push(title_end(last));
-                        }
-                    } else if side == Side::Before {
-                        points.push(pt(last.x, 0.));
-                    } else {
-                        points.push(pt(last.x, size.height));
-                    }
-                    let piece = PathPiece {
-                        container: container,
-                        points: points,
-                    };
-                    if outgoing {
-                        ctx.paths[chain.inst].source_stubs.push(piece);
-                    } else {
-                        ctx.paths[chain.inst].dest_stubs.push(piece);
-                    }
-                    if to_self {
-                        ctx.paths[chain.inst].main = Some(PathPiece {
-                            container: container,
-                            points: vec![],
-                        });
-                    }
-                },
-            }
-        }
     }
-    for (inst, m) in self_loops {
-        let Some((_, rect, _)) = result.members.iter().find(|(mm, _, _)| mm == m) else {
-            continue;
-        };
-        let d = config.port_gap;
-        let x = rect.right() - config.port_margin;
-        let points =
-            vec![
-                pt(x, rect.bottom()),
-                pt(x, rect.bottom() + d),
-                pt(rect.right() + d, rect.bottom() + d),
-                pt(rect.right() + d, rect.y - d),
-                pt(x, rect.y - d),
-                pt(x, rect.y),
-            ];
-        ctx.paths[*inst].main = Some(PathPiece {
-            container: container,
-            points: points,
-        });
-    }
+    ctx.geometry.insert(container, Geometry {
+        island_x: island_x,
+        islands: islands,
+        origin: origin,
+        self_loops: self_loops
+            .iter()
+            .filter_map(|(inst, m)| Some((*inst, result.members.iter().find(|(mm, _, _)| mm == m)?.1)))
+            .collect(),
+        size: size,
+        title_height: title_height,
+    });
     return result;
 }
 
@@ -1422,11 +1451,6 @@ pub struct NodeSize {
     pub width: f64,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct PathPiece {
-    pub container: Option<usize>,
-    pub points: Vec<Pt>,
-}
 
 #[derive(Clone, Debug)]
 pub struct PlacedEdge {
